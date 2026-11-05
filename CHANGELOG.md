@@ -4,6 +4,13 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.03.00 (Nov 5, 2026)
+
+- **New settings file, `settings.ini`.** Every adjustable setting now lives in one optional file of your own, so an upgrade never undoes your changes (before, many were at the top of `sol_watch.py` and were lost on each upgrade). Copy `settings.example.ini` to `settings.ini` and change what you like; the example explains each line. Without the file the bridge runs on its defaults, so it still needs only `.env`.
+- A value the bridge can't use, or a misspelt setting name, is reported in the log and its default kept. Poll intervals can't go below 10 seconds, and the bridge warns if they add up to more than 40 API reads a minute.
+- `.env` is now for secrets only. `DERELICT_CHECK_MINUTES`, `DERELICT_MIN_VALUE` and `IRL_TIMEZONE` still work there as before.
+- **Upgrading from 1.02.00 or older:** nothing to do. If you had changed settings at the top of `sol_watch.py`, put them in `settings.ini` (the names are in `settings.example.ini`).
+
 ## 1.02.00 (Nov 5, 2026)
 
 - **Alliance chat is its own key section.** Since the game's Nov 5 update, `/chat` includes your alliance's messages only when the key has **Alliance chat** ticked, and new keys leave it unticked. The bridge now lists it as optional and says once at startup if it's not ticked. Global chat still needs Public chat.

@@ -17,7 +17,7 @@ It only reads. It can't play the game or act for you, and it uses the API at abo
 
 | Channel (webhook) | What it posts |
 | --- | --- |
-| `WEBHOOK_CORP` | **Combat:** rival warships heading for our places, battles involving us or our allies, our duels and sieges. **Problems:** queued actions that are blocked, the research queue running empty, and production stalls. **72/48/24-hour warnings** for crew supplies running out, storage filling up, and inputs or maintenance goods running out. **Research:** started, finished, a 5-minute warning, and "finished with nothing next". **Construction** completed. **Launches:** queue to pad, launched, arrived, completed, failed (craft we abandoned drifting out of service are only logged). **Salvage:** another company salvaging one of our derelicts. **Halcyon Arms Exchange:** warships listed, sold or withdrawn (our own purchases aren't posted), and factions buying warships there. Safe mode set by hand. Losses. Mining. Ore running out. **Faction standings**, as a full table whenever one moves. **Clear Sky or bloodmark** data appearing. Daily login gift unclaimed. Badges and firsts. **SOL API changes** (game updates themselves are only logged, unless `GAME_UPDATE_POSTS` is on). **Bridge updates:** a new version of this bridge. **Diplomacy:** offers made to us (with a warning if we lack the goods they ask for), counter-offers, deals accepted, rejected or expired, a warning an hour before an offer waiting on us expires, and agreements starting or ending. |
+| `WEBHOOK_CORP` | **Combat:** rival warships heading for our places, battles involving us or our allies, our duels and sieges. **Problems:** queued actions that are blocked, the research queue running empty, and production stalls. **72/48/24-hour warnings** for crew supplies running out, storage filling up, and inputs or maintenance goods running out. **Research:** started, finished, a 5-minute warning, and "finished with nothing next". **Construction** completed. **Launches:** queue to pad, launched, arrived, completed, failed (craft we abandoned drifting out of service are only logged). **Salvage:** another company salvaging one of our derelicts. **Halcyon Arms Exchange:** warships listed, sold or withdrawn (our own purchases aren't posted), and factions buying warships there. Safe mode set by hand. Losses. Mining. Ore running out. **Faction standings**, as a full table whenever one moves. **Clear Sky or bloodmark** data appearing. Daily login gift unclaimed. Badges and firsts. **SOL API changes** (game updates themselves are only logged, unless `game_update_posts` is on). **Bridge updates:** a new version of this bridge. **Diplomacy:** offers made to us (with a warning if we lack the goods they ask for), counter-offers, deals accepted, rejected or expired, a warning an hour before an offer waiting on us expires, and agreements starting or ending. |
 | `WEBHOOK_GENERAL` | New contract offers (filtered by tier). New alliance jobs, from factions and from other clients. **Pad goals:** spaceports asking every company for a new launch pad's materials. Ship orders, bounties and rescue contracts. A **standing advisor** line on every faction contract and siege. Offers taken by another company. **Siege contracts against us.** Our closed contracts. Asteroid threats. Hazard forecasts and arrivals. New debris fields. Hazard strikes. Battles elsewhere in Sol. **Derelicts** of other companies worth $500M or more. Global chat. |
 | `WEBHOOK_ALLIANCE` | Alliance chat, spies caught spying on our alliance or on behalf of it, and alliances marking us hostile |
 
@@ -29,6 +29,8 @@ It only reads. It can't play the game or act for you, and it uses the API at abo
 | `CHANGELOG.md` | What changed in each version, newest first |
 | `.env.example` | Template for your settings. Copy it to `.env`. |
 | `.env` | Your API key and webhooks, made from `.env.example`. **Keep it private.** |
+| `settings.example.ini` | Every adjustable setting, explained, at its default. Copy it to `settings.ini` to change any. |
+| `settings.ini` | Optional. Your own settings, made from `settings.example.ini`. Without it the defaults apply. |
 | `LICENSE` | Public domain (the Unlicense) |
 | `requirements.txt` | Python dependencies |
 | `run.sh` | Starts the bridge from its folder, using `.venv` when there is one |
@@ -63,6 +65,7 @@ You need Python 3.9 or newer. Check with `python3 --version`.
    chmod 600 .env
    chmod +x run.sh
    ```
+   That's all it needs. To change any setting later, `cp settings.example.ini settings.ini` and edit that (see Settings).
 2. Create a virtual environment and install `requests`.
    ```bash
    python3 -m venv .venv
@@ -135,34 +138,32 @@ tmux new -s solwatch './run.sh --silent'          # detach with Ctrl+B then D; r
 
 ## Settings
 
-**In `.env`.** Real environment variables override the file.
+Two files, both next to `sol_watch.py`. Neither is ever part of a download, so upgrading never touches them.
+
+**`.env`: secrets only (required).** Real environment variables override it.
 
 | Name | Meaning |
 | --- | --- |
 | `SOL_BRIDGE_API_KEY` | SOL API key, made in the game under Settings › Account › API keys. `SOL_API_KEY` also works. |
 | `WEBHOOK_CORP`, `WEBHOOK_GENERAL`, `WEBHOOK_ALLIANCE` | Discord webhook URLs |
-| `DERELICT_CHECK_MINUTES` | Optional. How often to look for other companies' valuable derelicts, in minutes (at least 10). Default: 60. `off` turns the check off, and the craft map is then never downloaded. |
-| `DERELICT_MIN_VALUE` | Optional. The smallest salvage value to post, in $M, e.g. `2000`. Default: 500. |
-| `IRL_TIMEZONE` | Time zone for real times in the log files and for the daily status hour, e.g. `Europe/London` or `America/New_York` (Discord shows real times in each viewer's own zone). If it's empty, the machine's own zone is used, and servers are often set to UTC. |
 
-**At the top of `sol_watch.py`:**
-- `CONTRACT_FILTER_TIER`:
-  - `newcomer` shows every tier.
-  - `mid` hides newcomer offers.
-  - `leader` shows only leader offers.
-  - Faction and special offers, which have no tier, are always shown.
-- `INTERVAL_*` sets the seconds between polls of each watcher. The defaults use about 21 reads a minute, under the API's limit of 60 a minute.
-- `COUNTDOWN_WARNINGS_HOURS` sets the real hours before running out or filling up at which to warn. Default: 72, 48, 24, 12, 4, 1.
-- `DAILY_STATUS_HOUR` is the IRL hour (in `IRL_TIMEZONE`) of the daily 🟢 BRIDGE STATUS post: version, uptime, polls, game updates and problems in the last 24 h, and the game build. Brief server outages (HTTP 502/503/504 or a dropped connection) within 10 minutes of an update going live are counted with the update ("2 brief outages during them"), not as problems. `errors.log` still records them all. Default: 8. `None` turns it off.
-- `IGNORED_STALL_REASONS` lists production stalls that aren't problems. Default: `paused` and `keepLimit`, both of which you choose yourself.
-- `INCOMING_IGNORE_EARTH_MOON`: rival warships heading for our places in Earth and Moon space (LEO station, Lunar orbit station, the Moon, the Earth–Moon Lagrange points) are only logged, because no fighting is allowed there. While we're marked hostile to an alliance (a spy of ours was caught) or branded terrorists, they alert there too, with a warning. Default: `True`.
-- `INCOMING_IGNORE_PLACES` lists more places where rival warships arriving doesn't alert. Default: none.
-- `INCOMING_IGNORE_COMPANIES` lists companies whose fleets never count as threats. Default: `UEG Navy`.
-- `DERELICT_ALERT_MIN_VALUE` is the smallest salvage value, in $M, of another company's derelict (a craft it abandoned) that gets posted. Default: 500. `None` turns it off. `INTERVAL_DERELICTS` is how often it looks, in seconds. Default: 3600 (hourly), because each look downloads the whole craft map (about 1.3 MB). Both are easier to set in `.env` (below).
-- `GAME_UPDATE_POSTS`: post each new game build. Default: `False` (only logged and counted in the daily status; an API change it brings is still posted).
-- `STANDING_ALERT_STEP` is how far one faction's standing must move before the full table is posted. Default: 1.0.
-- `FACTION_NAMES` holds display names for faction ids. Add new factions here as they emerge.
-- `UPDATE_CHECK`: check GitHub for a newer version of the bridge at startup and once a day. Default: `True`. `False` turns it off. A fork can point `BRIDGE_PROJECT_URL` and `BRIDGE_SOURCE_URL` at its own project.
+**`settings.ini`: everything you can adjust (optional).** Without it, the bridge runs on the defaults below. To change something, copy `settings.example.ini` to `settings.ini`, remove the `#` in front of the line and set your value, then restart the bridge. The example explains every line. A value the bridge can't use is reported in the log (and `errors.log`) and its default kept; a misspelt name is reported too.
+
+| Section | Settings (default) |
+| --- | --- |
+| `[contracts]` | `tier_filter` (mid): `newcomer` posts every tier, `mid` hides newcomer offers, `leader` posts only leader offers; faction and special offers, which have no tier, are always posted. `alliance_job_min_level` (easy), `alliance_job_digest_at` (3). |
+| `[alerts]` | `countdown_warnings_hours` (72, 48, 24, 12, 4, 1): real hours before something runs out or fills up. `research_warning_minutes` (5), `deal_expiry_warning_minutes` (60), `stall_repeat_hours` (6), `ignored_stall_reasons` (paused, keepLimit: both your own choice), `standing_alert_step` (1.0), `daily_status_hour` (8, or `off`), `game_update_posts` (no). |
+| `[incoming]` | `ignore_earth_moon` (yes): rival warships heading for Earth and Moon space, where no fighting is allowed, are only logged; while we're marked hostile to an alliance or branded terrorists they alert there too. `ignore_places` (none), `ignore_companies` (UEG Navy). |
+| `[derelicts]` | `check_minutes` (60, at least 10, or `off`, which skips the 1.3 MB craft map entirely), `min_value` (500, in $M). |
+| `[time]` | `irl_timezone` (the machine's zone): e.g. `Europe/London`. Used for the log files and the daily status hour; Discord shows real times in each viewer's own zone. Servers are often set to UTC. |
+| `[updates]` | `update_check` (yes), and for a fork `project_url` and `source_url`. |
+| `[intervals]` | Seconds between checks of each part of the API, at least 10. The defaults use about 21 of the API's 60 reads a minute per key; the bridge warns if yours add up to more than 40. |
+
+The daily 🟢 BRIDGE STATUS post gives the version, uptime, polls, game updates and problems in the last 24 h, and the game build. Brief server outages (HTTP 502/503/504 or a dropped connection) within 10 minutes of an update going live are counted with the update ("2 brief outages during them"), not as problems; `errors.log` still records them all.
+
+`DERELICT_CHECK_MINUTES`, `DERELICT_MIN_VALUE` and `IRL_TIMEZONE` still work in `.env` too, as in earlier versions, and win over `settings.ini`.
+
+**Kept in `sol_watch.py`:** how the game works rather than what you prefer: faction names and rivals, the standing rules (`FACTION_RIVALS`, `STANDING_GAIN`, `RIVAL_PENALTY`), the API key sections and the like. They change only with the game, in a new version of the bridge.
 
 ## How it behaves
 
@@ -200,7 +201,7 @@ tmux new -s solwatch './run.sh --silent'          # detach with Ctrl+B then D; r
     - Hard jobs and full contracts also cost each of the client's rivals −5.
   - **Warnings:** the line also warns when a faction would change tier (Hostile ≤ −50, Unfriendly ≤ −10, Neutral, Friendly ≥ +10, Trusted ≥ +50). It marks ⛔ a faction at −50 or below, which refuses our contracts.
   - **Where the rules come from:** the API doesn't give them. They're from the game's standing logs and are set at the top of `sol_watch.py` (`FACTION_RIVALS`, `STANDING_GAIN`, `RIVAL_PENALTY`). Update them if the game changes.
-- **Alliance jobs arrive in a batch.** The game posts a day's faction jobs all at once. When 3 or more arrive together (`ALLIANCE_JOB_DIGEST_AT`), they're posted as one digest: grouped by faction, hardest and best-paid first, each with its standing effect. `ALLIANCE_JOB_MIN_LEVEL` can hide easy jobs.
+- **Alliance jobs arrive in a batch.** The game posts a day's faction jobs all at once. When 3 or more arrive together (`alliance_job_digest_at`), they're posted as one digest: grouped by faction, hardest and best-paid first, each with its standing effect. `alliance_job_min_level` in `settings.ini` can hide easy jobs.
 - **Repair contracts** for our craft or an ally's are highlighted (🔧) whatever the tier filter says. Hazard strikes say whose craft were hit, us and allies first. When one of ours is damaged, the alert gives the deadline for repairing it before it's lost.
 - **Halcyon Arms Exchange.** New listings come as one line per batch, grouped by ship type and price. Sales and withdrawals get one line too, and so do ships you buy.
 - **Earth's government.** Changes to the Secretary-General, the offices, vacancies and the next Security Council session are posted. They're saved in `state.json`, so a change made while the bridge was stopped is still reported.
@@ -209,7 +210,7 @@ tmux new -s solwatch './run.sh --silent'          # detach with Ctrl+B then D; r
 - **Slowed or stopped sites.** A site held back by something (crew, inputs, upkeep) for two checks in a row is posted, grouped by place and reason. One still producing is "🐢 slowed" (short of crew, a site keeps running at reduced output), one producing nothing is "⏸️ stopped". A crew shortage gives the place's crew and the crew it needs, e.g. "not enough crew (36.7 of 38)".
 - **Stock that's already empty.** A "runs out" warning with less than 15 minutes left (`STOCK_ALREADY_EMPTY_HOURS`) isn't posted. The production-stall alert covers it.
 - **New fields.** `logs/new-fields.log` ignores keys that are game data rather than field names: tech levels, and any good, tech, ship, place or facility id. A new faction id still shows up.
-- **Game updates.** Every 5 minutes the bridge reads the public page at solthegame.com (without the API key) and compares the fingerprinted code files it loads (`assets/index-<fingerprint>.js`). A new fingerprint means a new build: it's logged and counted in the daily status (not posted, unless `GAME_UPDATE_POSTS = True`), and the API spec is re-checked 2 minutes later. If the update changed the API, that is posted, with the project's address: a bridge update that uses it may follow. `logs/new-fields.log` then shows any new data the game started sending, which a future version of the bridge might use.
+- **Game updates.** Every 5 minutes the bridge reads the public page at solthegame.com (without the API key) and compares the fingerprinted code files it loads (`assets/index-<fingerprint>.js`). A new fingerprint means a new build: it's logged and counted in the daily status (not posted, unless `game_update_posts = yes`), and the API spec is re-checked 2 minutes later. If the update changed the API, that is posted, with the project's address: a bridge update that uses it may follow. `logs/new-fields.log` then shows any new data the game started sending, which a future version of the bridge might use.
 - **Bridge updates.** At startup and then once a day, the bridge reads the `VERSION` line of `sol_watch.py` on the project's GitHub page. While a newer version is published, it posts 🆕 to the Corp channel, once a day until you upgrade (a restart within the hour doesn't repeat it). If GitHub can't be reached it only logs that and tries again the next day.
 - **Countdowns.** Each 72/48/24/12/4/1-hour mark is posted once as it's crossed. The marks already reached are saved in `state.json`, so a mark crossed while the bridge was stopped is posted on startup, and one already given isn't repeated. Something seen for the very first time (a new install, or a brand-new stock) is only listed in the startup summary.
 - **Contracts taken by others.**
@@ -223,12 +224,12 @@ tmux new -s solwatch './run.sh --silent'          # detach with Ctrl+B then D; r
 
 ## Upgrading
 
-The bridge tells you when a new version is out (🆕 in the Corp channel). Download it from https://github.com/Jomangork/sol-watch-bridge, replace the program files with the new ones and restart the bridge. Keep your `.env`, `state.json` and `logs/`: `state.json` is what stops a restart from repeating old news. Read the new `CHANGELOG.md` entries first.
+The bridge tells you when a new version is out (🆕 in the Corp channel). Download it from https://github.com/Jomangork/sol-watch-bridge, replace the program files with the new ones and restart the bridge. The download never contains `.env` or `settings.ini`, so copying it over your folder keeps your key, webhooks and settings. Keep `state.json` and `logs/` too: `state.json` is what stops a restart from repeating old news. Read the new `CHANGELOG.md` entries first.
 
 ## Privacy and what it shares
 
 - **What it reads:** your own company's data through your API key, plus public game data (other companies' names, news, the map, chat). Nothing else, and never the game's private messages (the API can't read them).
-- **Where it goes:** only to your three Discord webhooks, and to the log files next to the script. Nothing is sent anywhere else. The bridge also loads the game's public front page every 5 minutes (without your key) to notice game updates, and once a day reads the start of `sol_watch.py` on GitHub to notice a new version of the bridge. That request carries nothing about you; GitHub sees only your machine's IP address, as with any web page. `UPDATE_CHECK = False` turns it off.
+- **Where it goes:** only to your three Discord webhooks, and to the log files next to the script. Nothing is sent anywhere else. The bridge also loads the game's public front page every 5 minutes (without your key) to notice game updates, and once a day reads the start of `sol_watch.py` on GitHub to notice a new version of the bridge. That request carries nothing about you; GitHub sees only your machine's IP address, as with any web page. `update_check = no` in `settings.ini` turns it off.
 - **Chat relay:** global and alliance chat are copied into your Discord channels, and into `logs/bridge.log`. That means other players' messages end up in your server, so think about who can see those channels. To turn chat relay off, untick **Public chat** (global chat) or **Alliance chat** on the bridge's API key: the bridge says once that it's missing and carries on with everything else. Alliance chat is your alliance's private channel, so check with your alliance before relaying it.
 - **Logs** hold chat text and your company's activity. They live in `logs/` and are capped at about 40 MB in total (old files rotate out).
 - **Asking for help:** share log lines or `errors.log`, never `.env`. Webhook URLs are already hidden in the logs.

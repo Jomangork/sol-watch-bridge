@@ -1,5 +1,6 @@
 # Your secrets and the bridge's own working files: never upload these.
 .env
+settings.ini
 state.json
 sol_watch.lock
 logs/

@@ -13,7 +13,8 @@ Files it writes next to itself (none of them with --once):
     sol_watch.lock         stops a second copy running (Linux only)
     captures/              raw JSON of item types never seen before
 
-Settings come from a .env file next to this script (or one folder up), or from
+Your adjustable settings go in settings.ini next to this script (optional; copy settings.example.ini).
+Secrets come from a .env file next to this script (or one folder up), or from
 real environment variables, which win:
     SOL_BRIDGE_API_KEY   SOL API key (SOL_API_KEY is accepted too)
     WEBHOOK_CORP         Discord webhook for research, fleet and mining
@@ -80,12 +81,17 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.02.00"
+VERSION = "1.03.00"
 HERE = Path(__file__).resolve().parent
+SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
+MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
+READS_PER_MINUTE_WARNING = 40   # warn when the intervals add up to more API reads a minute than this
 LOG_DIR = HERE / "logs"
 API_BASE = "https://solthegame.com/api/v1"
 
 # ================= SETTINGS =================
+# These are the defaults. Change them in settings.ini (see settings.example.ini), not here: an upgrade
+# replaces this file. Settings with no settings.ini key describe the game itself and change with new versions.
 # "newcomer" shows every tier, "mid" hides newcomer offers, "leader" shows only
 # leader offers. Untiered (faction/special) offers are always shown.
 CONTRACT_FILTER_TIER = "mid"
@@ -436,6 +442,7 @@ def load_env():
                     key, value = line.split("=", 1)
                     os.environ.setdefault(key.strip(), value.strip())
             break
+    load_settings(HERE / SETTINGS_FILE)
 
     config = {
         "api_key": os.environ.get("SOL_BRIDGE_API_KEY") or os.environ.get("SOL_API_KEY"),
@@ -449,6 +456,7 @@ def load_env():
     config["irl_tz"] = load_timezone(os.environ.get("IRL_TIMEZONE", "").strip())
     apply_derelict_settings(os.environ.get("DERELICT_CHECK_MINUTES", "").strip(),
                             os.environ.get("DERELICT_MIN_VALUE", "").strip())
+    check_read_rate()
     return config
 
 
@@ -474,6 +482,137 @@ def apply_derelict_settings(minutes, min_value):
             except ValueError:
                 log(f"[Warning] DERELICT_MIN_VALUE '{min_value}' isn't a number; using ${DERELICT_ALERT_MIN_VALUE}M.")
     DerelictWatcher.interval = INTERVAL_DERELICTS
+
+
+# ================= SETTINGS FILE =================
+# settings.ini next to the script (optional): the user's own settings, which an upgrade never replaces.
+# Every key is optional; a missing file or key keeps the default set at the top of this file.
+# (section, key, setting, kind, limits). Kinds: int and float with (min, max); choice with its options;
+# bool; set (comma-separated words); hours (comma-separated whole hours); hour (0-23 or off); text.
+# "env" settings are passed on as environment variables, which a real variable or .env overrides.
+SETTINGS_SPEC = (
+    ("contracts", "tier_filter", "CONTRACT_FILTER_TIER", "choice", ("newcomer", "mid", "leader")),
+    ("contracts", "alliance_job_min_level", "ALLIANCE_JOB_MIN_LEVEL", "choice", ("easy", "medium", "hard")),
+    ("contracts", "alliance_job_digest_at", "ALLIANCE_JOB_DIGEST_AT", "int", (2, 100)),
+    ("alerts", "countdown_warnings_hours", "COUNTDOWN_WARNINGS_HOURS", "hours", None),
+    ("alerts", "research_warning_minutes", "RESEARCH_WARNING_SECONDS", "minutes", (1, 120)),
+    ("alerts", "deal_expiry_warning_minutes", "DEAL_EXPIRY_WARNING_MINUTES", "int", (1, 1440)),
+    ("alerts", "stall_repeat_hours", "STALL_REPEAT_HOURS", "float", (0, 168)),
+    ("alerts", "ignored_stall_reasons", "IGNORED_STALL_REASONS", "set", None),
+    ("alerts", "standing_alert_step", "STANDING_ALERT_STEP", "float", (0.1, 100)),
+    ("alerts", "daily_status_hour", "DAILY_STATUS_HOUR", "hour", None),
+    ("alerts", "game_update_posts", "GAME_UPDATE_POSTS", "bool", None),
+    ("incoming", "ignore_earth_moon", "INCOMING_IGNORE_EARTH_MOON", "bool", None),
+    ("incoming", "ignore_places", "INCOMING_IGNORE_PLACES", "set", None),
+    ("incoming", "ignore_companies", "INCOMING_IGNORE_COMPANIES", "set", None),
+    ("derelicts", "check_minutes", "DERELICT_CHECK_MINUTES", "env", None),
+    ("derelicts", "min_value", "DERELICT_MIN_VALUE", "env", None),
+    ("time", "irl_timezone", "IRL_TIMEZONE", "env", None),
+    ("updates", "update_check", "UPDATE_CHECK", "bool", None),
+    ("updates", "project_url", "BRIDGE_PROJECT_URL", "text", None),
+    ("updates", "source_url", "BRIDGE_SOURCE_URL", "text", None),
+) + tuple(("intervals", name.lower(), f"INTERVAL_{name}", "int", (MIN_POLL_SECONDS, 86400)) for name in (
+    "CHAT", "CRAFT", "MINING", "CONTRACTS", "HISTORY", "RESEARCH", "DEFENSE", "COMPANY", "INDUSTRY",
+    "FLEET_MAP", "FLEETS", "SLOW", "DIPLOMACY", "RECORDS", "NEWS", "PAD_GOALS", "API_SPEC", "GAME_SITE"))
+OFF_WORDS = {"off", "none", "no", "false", "0"}
+
+
+def parse_setting(kind, limits, raw):
+    """The value of one setting from its text, or raises ValueError with what's wrong."""
+    text = raw.strip()
+    if kind in ("int", "float", "minutes"):
+        value = float(text.replace(",", ""))
+        low, high = limits
+        if not low <= value <= high:
+            raise ValueError(f"must be from {low:g} to {high:g}")
+        if kind == "minutes":
+            return int(value * 60)
+        return int(value) if kind == "int" else value
+    if kind == "choice":
+        if text.lower() not in limits:
+            raise ValueError("must be one of " + ", ".join(limits))
+        return text.lower()
+    if kind == "bool":
+        if text.lower() in ("yes", "on", "true", "1"):
+            return True
+        if text.lower() in OFF_WORDS:
+            return False
+        raise ValueError("must be yes or no")
+    if kind == "set":
+        return {part.strip() for part in text.split(",") if part.strip()}
+    if kind == "hours":
+        hours = sorted({int(part) for part in text.split(",") if part.strip()}, reverse=True)
+        if not hours or hours[-1] < 1:
+            raise ValueError("must be whole hours of 1 or more, e.g. 72, 24, 4, 1")
+        return tuple(hours)
+    if kind == "hour":
+        if text.lower() in OFF_WORDS - {"0"}:
+            return None
+        hour = int(text)
+        if not 0 <= hour <= 23:
+            raise ValueError("must be an hour from 0 to 23, or off")
+        return hour
+    if not text.startswith("https://"):  # text: the update check's addresses
+        raise ValueError("must be an https:// address")
+    return text
+
+
+def load_settings(path):
+    """Apply settings.ini (if there is one). A bad value is reported and its default kept."""
+    import configparser
+    if not path.exists():
+        log(f"[Settings] No {path.name}: using the defaults (see settings.example.ini).")
+        return
+    parser = configparser.ConfigParser(interpolation=None, inline_comment_prefixes=("#", ";"))
+    try:
+        parser.read(path, encoding="utf-8")
+    except configparser.Error as err:
+        log(f"[Warning] {path.name} couldn't be read, so the defaults are used: {err}")
+        return
+    known = {(section, key): (name, kind, limits) for section, key, name, kind, limits in SETTINGS_SPEC}
+    applied = []
+    for section in parser.sections():
+        for key, raw in parser.items(section):
+            spec = known.get((section.lower(), key.lower()))
+            if spec is None:
+                log(f"[Warning] {path.name}: unknown setting '{key}' in [{section}], ignored (a typo?).")
+                continue
+            name, kind, limits = spec
+            if not raw.strip():
+                continue  # left empty: the default
+            if kind == "env":
+                os.environ.setdefault(name, raw.strip())  # a real variable or .env still wins
+                applied.append(key)
+                continue
+            try:
+                globals()[name] = parse_setting(kind, limits, raw)
+            except ValueError as err:
+                log(f"[Warning] {path.name}: [{section}] {key} = {raw.strip()!r} {err}; the default is kept.")
+                continue
+            applied.append(key)
+    apply_poll_intervals()
+    log(f"[Settings] {path.name}: " + (", ".join(applied) if applied else "nothing set, defaults used"))
+
+
+def check_read_rate():
+    reads = estimated_reads_per_minute()
+    if reads > READS_PER_MINUTE_WARNING:
+        log(f"[Warning] These intervals make about {reads:.0f} API reads a minute; the API allows 60 a minute "
+            f"per key, and other tools on the same key share it. Longer intervals are kinder to the server.")
+    return reads
+
+
+def apply_poll_intervals():
+    """Each watcher class takes its poll interval from its INTERVAL_* setting (fixed when the class was made)."""
+    for cls_name, setting in WATCHER_INTERVALS.items():
+        globals()[cls_name].interval = globals()[setting]
+
+
+def estimated_reads_per_minute():
+    """API reads a minute at the current intervals (the website, spec and GitHub checks aren't API reads)."""
+    return sum(60 / globals()[setting] for cls_name, setting in WATCHER_INTERVALS.items()
+               if cls_name not in ("ApiSpecWatcher", "GameUpdateWatcher", "DerelictWatcher")) \
+        + (60 / INTERVAL_DERELICTS if DERELICT_ALERT_MIN_VALUE is not None else 0)
 
 
 def load_timezone(name):
@@ -3005,6 +3144,22 @@ class BridgeUpdateWatcher(Watcher):
                 f"section how to install it. This reminder repeats once a day until the bridge is upgraded.")
         # Posted even on the first poll, like a game update: it's news whenever the bridge starts.
         self.ctx["discord"].post(self.webhook, self.header, [text])
+
+
+# Which INTERVAL_* setting each watcher polls at (settings.ini can change them; see apply_poll_intervals).
+# DerelictWatcher's is set by apply_derelict_settings, and BridgeUpdateWatcher's is fixed at a day.
+WATCHER_INTERVALS = {
+    "ChatWatcher": "INTERVAL_CHAT", "CraftWatcher": "INTERVAL_CRAFT", "MiningWatcher": "INTERVAL_MINING",
+    "OreBodiesWatcher": "INTERVAL_MINING", "ContractsWatcher": "INTERVAL_CONTRACTS",
+    "ContractHistoryWatcher": "INTERVAL_HISTORY", "ResearchWatcher": "INTERVAL_RESEARCH",
+    "DefenseWatcher": "INTERVAL_DEFENSE", "CompanyWatcher": "INTERVAL_COMPANY",
+    "IndustryWatcher": "INTERVAL_INDUSTRY", "FleetMapWatcher": "INTERVAL_FLEET_MAP",
+    "FleetsWatcher": "INTERVAL_FLEETS", "FactionsWatcher": "INTERVAL_SLOW", "AllianceWatcher": "INTERVAL_SLOW",
+    "DiscoveriesWatcher": "INTERVAL_SLOW", "AccountWatcher": "INTERVAL_SLOW",
+    "DiplomacyWatcher": "INTERVAL_DIPLOMACY", "RecordsWatcher": "INTERVAL_RECORDS", "NewsWatcher": "INTERVAL_NEWS",
+    "PadGoalWatcher": "INTERVAL_PAD_GOALS", "ApiSpecWatcher": "INTERVAL_API_SPEC",
+    "GameUpdateWatcher": "INTERVAL_GAME_SITE",
+}
 
 
 # ================= MAIN =================
