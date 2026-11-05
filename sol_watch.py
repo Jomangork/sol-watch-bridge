@@ -80,7 +80,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.01.00"
+VERSION = "1.02.00"
 HERE = Path(__file__).resolve().parent
 LOG_DIR = HERE / "logs"
 API_BASE = "https://solthegame.com/api/v1"
@@ -110,11 +110,17 @@ DEAL_EXPIRY_WARNING_MINUTES = 60
 INTERVAL_RECORDS = 600    # badges and firsts
 INTERVAL_NEWS = 300       # Solar News, for salvages of our derelicts
 INTERVAL_PAD_GOALS = 300  # spaceports asking every company for a new launch pad's materials (/ueg)
-INTERVAL_DERELICTS = 600  # the craft map (large, ~1.3 MB), for valuable derelicts of other companies
+# Valuable derelicts of other companies: each check downloads the whole craft map (~1.3 MB), so hourly.
+# DERELICT_CHECK_MINUTES and DERELICT_MIN_VALUE in .env override these two (and survive upgrades).
+INTERVAL_DERELICTS = 3600
+DERELICT_MIN_INTERVAL = 600  # never more often than every 10 minutes, whatever .env says
 # Post another company's derelict when its salvage value (lootValue, $M) is at least this. None turns it off.
-DERELICT_ALERT_MIN_VALUE = 500
+DERELICT_ALERT_MIN_VALUE: Optional[float] = 500
 INTERVAL_API_SPEC = 3600  # watch the API itself for new fields
 INTERVAL_GAME_SITE = 300  # the game's web page, to spot game updates
+# Post each new game build to Discord. False: game updates are only logged (and counted in the daily status);
+# a change to the API they bring is still posted, by the API spec check.
+GAME_UPDATE_POSTS = False
 GAME_SITE_URL = "https://solthegame.com/"
 # The web client's code files carry a fingerprint that changes with each build: assets/index-LPebQ6Gw.js
 GAME_BUNDLE = re.compile(r"assets/[\w.-]+\.(?:js|css)")
@@ -237,7 +243,10 @@ KEY_SECTIONS = (
     ("ueg", "UEG", "needed", ("/ueg",), "pad goals"),
     ("alliance", "Alliance", "needed", ("/alliance",), "spies caught"),
     ("discoveries", "Discoveries", "needed", ("/discoveries",), "alliances marking us hostile"),
-    ("chat", "Public chat", "needed", ("/chat",), "global and alliance chat relay"),
+    ("chat", "Public chat", "needed", ("/chat",), "global chat relay"),
+    # Since 2026-11-05 /chat includes alliance messages only when the key may read Alliance chat, which is
+    # unticked on new keys. /chat/alliance itself isn't read: /chat carries both channels.
+    ("alliance_chat", "Alliance chat", "optional", ("/chat/alliance",), "alliance chat relay"),
     ("account", "Account", "optional", ("/account",), "the daily gift reminder"),
 )
 # A short "still running" post to the corp channel once a day at this IRL hour (IRL_TIMEZONE), or None for none.
@@ -438,7 +447,33 @@ def load_env():
     if missing:
         sys.exit(f"Missing settings: {', '.join(missing)}. Put them in {HERE / '.env'} (see .env.example).")
     config["irl_tz"] = load_timezone(os.environ.get("IRL_TIMEZONE", "").strip())
+    apply_derelict_settings(os.environ.get("DERELICT_CHECK_MINUTES", "").strip(),
+                            os.environ.get("DERELICT_MIN_VALUE", "").strip())
     return config
+
+
+def apply_derelict_settings(minutes, min_value):
+    """DERELICT_CHECK_MINUTES and DERELICT_MIN_VALUE from .env, which win over the settings at the top
+    (so they survive an upgrade). "off" (or 0) for either turns the derelict check off."""
+    global INTERVAL_DERELICTS, DERELICT_ALERT_MIN_VALUE
+    if minutes:
+        if minutes.lower() in ("off", "0", "none"):
+            DERELICT_ALERT_MIN_VALUE = None
+        else:
+            try:
+                INTERVAL_DERELICTS = max(int(float(minutes) * 60), DERELICT_MIN_INTERVAL)
+            except ValueError:
+                log(f"[Warning] DERELICT_CHECK_MINUTES '{minutes}' isn't a number; "
+                    f"checking every {INTERVAL_DERELICTS // 60} minutes.")
+    if min_value:
+        if min_value.lower() in ("off", "0", "none"):
+            DERELICT_ALERT_MIN_VALUE = None
+        else:
+            try:
+                DERELICT_ALERT_MIN_VALUE = float(min_value.replace("$", "").replace("M", "").replace(",", ""))
+            except ValueError:
+                log(f"[Warning] DERELICT_MIN_VALUE '{min_value}' isn't a number; using ${DERELICT_ALERT_MIN_VALUE}M.")
+    DerelictWatcher.interval = INTERVAL_DERELICTS
 
 
 def load_timezone(name):
@@ -2831,6 +2866,8 @@ class ApiSpecWatcher(Watcher):
                 text += "\nRemoved: " + ", ".join(f"`{r.replace('/api/v1', '')}`" for r in removed[:25])
             if any(WATCH_WORDS.search(a + fields[a]) for a in added):
                 text += "\n🩸 **Includes Clear Sky / bloodmark fields!**"
+            text += (f"\nA bridge update may follow to make use of it: watch <{BRIDGE_PROJECT_URL}>"
+                     + (" (the bridge also posts here when one is out)." if UPDATE_CHECK else "."))
             if first:  # changed while we were stopped: still worth posting
                 self.ctx["discord"].post(self.webhook, self.header, [text])
             else:
@@ -2897,14 +2934,15 @@ class GameUpdateWatcher(Watcher):
         # Go-live times of the last day, so the daily status can count updates and excuse their outages.
         recent = [u for u in (self.ctx["state"].get("game_updates") or []) if u >= time.time() - 86400]
         self.ctx["state"].set("game_updates", recent + [live])
-        new = [b.split("/")[-1] for b in bundles if b not in saved.get("bundles", [])]
-        text = (f"🔄 **[GAME UPDATE]** {when} A new version of the game is live (new build: {', '.join(new)}). "
-                f"Worth a check for changes the bridge should know about. The API spec is re-checked in "
-                f"{SPEC_RECHECK_AFTER_UPDATE_SECONDS // 60} minutes, and new fields go to `logs/new-fields.log`.")
+        # The build's file names are only logged (below): they mean nothing to players.
+        text = (f"🔄 **[GAME UPDATE]** {when} A new version of the game is live. The bridge re-checks the API in "
+                f"{SPEC_RECHECK_AFTER_UPDATE_SECONDS // 60} minutes and posts here if it changed.")
         log(f"[Game site] New build: {saved.get('bundles')} → {bundles} (Last-Modified {modified})")
         spec = self.ctx.get("spec_watcher")
         if spec is not None:
             spec.next_due = min(spec.next_due, time.monotonic() + SPEC_RECHECK_AFTER_UPDATE_SECONDS)
+        if not GAME_UPDATE_POSTS:
+            return  # logged above; an API change it brings is posted by the spec check
         # Posted even on the first poll: an update made while the bridge was stopped is still news.
         self.ctx["discord"].post(self.webhook, self.header, [text])
 
@@ -3150,12 +3188,17 @@ def main():
         RecordsWatcher(ctx, config["corp"]),
         DiscoveriesWatcher(ctx, config["alliance"]),
         NewsWatcher(ctx, config["corp"]),
-        DerelictWatcher(ctx, config["general"]),
         PadGoalWatcher(ctx, config["general"]),
         ApiSpecWatcher(ctx, config["corp"]),
         GameUpdateWatcher(ctx, config["corp"]),
         ChatWatcher(ctx),
     ]
+    if DERELICT_ALERT_MIN_VALUE is None:  # off: the large craft map isn't downloaded at all
+        log("[Derelicts] Check off.")
+    else:
+        watchers.append(DerelictWatcher(ctx, config["general"]))
+        log(f"[Derelicts] Every {INTERVAL_DERELICTS // 60} minutes, for derelicts worth "
+            f"{money(DERELICT_ALERT_MIN_VALUE)} or more.")
     if UPDATE_CHECK:
         watchers.append(BridgeUpdateWatcher(ctx, config["corp"]))
     else:

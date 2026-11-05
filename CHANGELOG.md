@@ -4,6 +4,14 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.02.00 (Nov 5, 2026)
+
+- **Alliance chat is its own key section.** Since the game's Nov 5 update, `/chat` includes your alliance's messages only when the key has **Alliance chat** ticked, and new keys leave it unticked. The bridge now lists it as optional and says once at startup if it's not ticked. Global chat still needs Public chat.
+- **Game updates are no longer posted,** only logged and counted in the daily status: several builds can go live in a night. If an update changes the API, that is still posted. `GAME_UPDATE_POSTS = True` brings the posts back (without the build's file names, which only the log keeps).
+- **API change posts** now point to the project page, where a bridge update that uses the change may follow.
+- **Derelicts are checked hourly** instead of every 10 minutes: each check downloads the whole craft map (~1.3 MB). Two new optional `.env` settings, which survive upgrades: `DERELICT_CHECK_MINUTES` (at least 10, or `off`, which skips the download entirely) and `DERELICT_MIN_VALUE` (the smallest salvage value to post, in $M; default 500). See `.env.example`.
+- **Coming:** the game's new proton storms (each flare now brings one, rated S1, S3 or S4, that blinds sensors for a while). The API doesn't describe them yet; once it does, the flare alert will say how severe the storm is.
+
 ## 1.01.00 (Nov 5, 2026)
 
 - **Update notice.** At startup and once a day, the bridge checks the project's GitHub page for a newer version of itself. While one exists, it posts "🆕 SOL-Watch x.yy.zz is available" to the Corp channel, once a day until you upgrade. It reads only the start of `sol_watch.py` there, sends nothing about you, and stays quiet if GitHub can't be reached. `UPDATE_CHECK = False` at the top of `sol_watch.py` turns it off.
