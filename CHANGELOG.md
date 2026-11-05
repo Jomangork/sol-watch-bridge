@@ -4,6 +4,11 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.04.00 (Nov 5, 2026)
+
+- **Status post at any times you like.** `status_times` in `settings.ini` takes as many times of day as you want, with minutes, e.g. `status_times = 06:00, 16:00` (default `08:00`; `off` for none). Each post now counts problems and game updates since the previous post instead of always the last 24 h. If the bridge was down over several times, it posts once when it's back. The older `daily_status_hour` still works.
+- **Proton storms** (announced in 1.02.00): a solar flare forecast now names its proton storm rating (S1 minor, S3 strong or S4 severe) and warns that craft without enough radiation shielding will be blinded for a while, letting rivals slip past where they watch.
+
 ## 1.03.00 (Nov 5, 2026)
 
 - **New settings file, `settings.ini`.** Every adjustable setting now lives in one optional file of your own, so an upgrade never undoes your changes (before, many were at the top of `sol_watch.py` and were lost on each upgrade). Copy `settings.example.ini` to `settings.ini` and change what you like; the example explains each line. Without the file the bridge runs on its defaults, so it still needs only `.env`.

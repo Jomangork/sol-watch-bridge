@@ -81,7 +81,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.03.00"
+VERSION = "1.04.00"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -257,7 +257,10 @@ KEY_SECTIONS = (
 )
 # A short "still running" post to the corp channel once a day at this IRL hour (IRL_TIMEZONE), or None for none.
 # If it doesn't arrive, the bridge or its machine is down.
-DAILY_STATUS_HOUR = 8
+DAILY_STATUS_HOUR: Optional[int] = 8
+# Times of day for the status post, as (hour, minute) in IRL_TIMEZONE, e.g. ((6, 0), (16, 0)); () for none.
+# None: once a day at DAILY_STATUS_HOUR (the older setting). settings.ini: status_times = 06:00, 16:00
+STATUS_TIMES: Optional[tuple] = None
 
 J2000_EPOCH = datetime(2000, 1, 1, 12, 0, 0, tzinfo=timezone.utc)
 
@@ -500,7 +503,8 @@ SETTINGS_SPEC = (
     ("alerts", "stall_repeat_hours", "STALL_REPEAT_HOURS", "float", (0, 168)),
     ("alerts", "ignored_stall_reasons", "IGNORED_STALL_REASONS", "set", None),
     ("alerts", "standing_alert_step", "STANDING_ALERT_STEP", "float", (0.1, 100)),
-    ("alerts", "daily_status_hour", "DAILY_STATUS_HOUR", "hour", None),
+    ("alerts", "status_times", "STATUS_TIMES", "times", None),
+    ("alerts", "daily_status_hour", "DAILY_STATUS_HOUR", "hour", None),  # older, one whole hour
     ("alerts", "game_update_posts", "GAME_UPDATE_POSTS", "bool", None),
     ("incoming", "ignore_earth_moon", "INCOMING_IGNORE_EARTH_MOON", "bool", None),
     ("incoming", "ignore_places", "INCOMING_IGNORE_PLACES", "set", None),
@@ -545,6 +549,19 @@ def parse_setting(kind, limits, raw):
         if not hours or hours[-1] < 1:
             raise ValueError("must be whole hours of 1 or more, e.g. 72, 24, 4, 1")
         return tuple(hours)
+    if kind == "times":  # "06:00, 16:00" or "8" or off
+        if text.lower() in OFF_WORDS - {"0"}:
+            return ()
+        times = set()
+        for part in (p.strip() for p in text.split(",") if p.strip()):
+            hour, _, minute = part.partition(":")
+            h, m = int(hour), int(minute or 0)
+            if not (0 <= h <= 23 and 0 <= m <= 59):
+                raise ValueError("must be times of day like 06:00, 16:30, or off")
+            times.add((h, m))
+        if not times:
+            raise ValueError("must be times of day like 06:00, 16:30, or off")
+        return tuple(sorted(times))
     if kind == "hour":
         if text.lower() in OFF_WORDS - {"0"}:
             return None
@@ -1001,32 +1018,64 @@ def newest_id(items):
 POLL_COUNTS = {"polls": 0, "failed": 0}  # since startup, for the daily status
 
 
+def status_times():
+    """The (hour, minute) times of day for the status post: STATUS_TIMES, or the older DAILY_STATUS_HOUR."""
+    if STATUS_TIMES is not None:
+        return STATUS_TIMES
+    return () if DAILY_STATUS_HOUR is None else ((DAILY_STATUS_HOUR, 0),)
+
+
 class DailyStatus:
-    """Once a day at DAILY_STATUS_HOUR (IRL time): a short "still running" post. Its absence means trouble."""
+    """A short "still running" post at each of status_times() (IRL time). Its absence means trouble.
+    Each post covers the time since the previous one (at most 24 h). Times missed while the bridge was down
+    give one post when it's back, not one each."""
 
     def __init__(self, ctx, webhook):
         self.ctx, self.webhook = ctx, webhook
         self.started = time.time()
-        # The very first run records today as done, so a deploy in the afternoon doesn't post at once.
-        if ctx["state"].get("status_posted_date") is None:
-            ctx["state"].set("status_posted_date", self.today().isoformat())
+        # The very first run, or the first after the times were changed, counts the latest time as done:
+        # neither a deploy nor a new schedule posts at once.
+        times = [list(t) for t in status_times()]
+        if ctx["state"].get("status_last_slot") is None or ctx["state"].get("status_times") != times:
+            slot = self.latest_slot()
+            ctx["state"].set("status_last_slot", slot.isoformat() if slot else "")
+            ctx["state"].set("status_times", times)
+
+    def now(self):
+        return datetime.now(tz=self.ctx["clock"].irl_tz)
 
     def today(self):
-        return datetime.now(tz=self.ctx["clock"].irl_tz).date()
+        return self.now().date()
+
+    def latest_slot(self, now=None):
+        """The most recent scheduled time at or before now (looking back up to a day), or None if none are set."""
+        now = now or self.now()
+        times = status_times()
+        if not times:
+            return None
+        for day in (now.date(), now.date() - timedelta(days=1)):
+            due = [datetime(day.year, day.month, day.day, h, m, tzinfo=now.tzinfo) for h, m in times]
+            due = [d for d in due if d <= now]
+            if due:
+                return max(due).replace(tzinfo=None)
+        return None
 
     def check(self):
-        if DAILY_STATUS_HOUR is None:
+        slot = self.latest_slot()
+        if slot is None or slot.isoformat() <= (self.ctx["state"].get("status_last_slot") or ""):
             return
-        now = datetime.now(tz=self.ctx["clock"].irl_tz)
-        if now.hour < DAILY_STATUS_HOUR or self.ctx["state"].get("status_posted_date") == now.date().isoformat():
-            return
-        self.ctx["state"].set("status_posted_date", now.date().isoformat())
-        self.ctx["discord"].post(self.webhook, "BRIDGE STATUS", [self.text()])
+        self.ctx["state"].set("status_last_slot", slot.isoformat())
+        text = self.text()
+        self.ctx["state"].set("status_last_at", time.time())
+        self.ctx["discord"].post(self.webhook, "BRIDGE STATUS", [text])
 
     def text(self):
         up = time.time() - self.started
         uptime = f"{up / 86400:.1f} days" if up >= 86400 else f"{up / 3600:.0f}h"
-        cutoff = time.time() - 86400
+        # Since the previous post (problems and game updates are only kept for 24 h anyway).
+        span = min(time.time() - (self.ctx["state"].get("status_last_at") or 0), 86400)
+        cutoff = time.time() - span
+        window = f"{span / 3600:.0f}h"
         updates = [u for u in (self.ctx["state"].get("game_updates") or []) if u >= cutoff]
         tags, excused = {}, 0
         for when, tag, message in PROBLEMS:
@@ -1036,9 +1085,9 @@ class DailyStatus:
                 excused += 1  # the server restarting for a game update
                 continue
             tags[tag] = tags.get(tag, 0) + 1
-        problems = (f"{sum(tags.values())} in 24h (" + ", ".join(f"{t} ×{n}" for t, n in sorted(tags.items(), key=lambda kv: -kv[1]))
-                    + ")") if tags else "none in 24h"
-        game_updates = f"{len(updates)} in 24h" if updates else "none in 24h"
+        problems = (f"{sum(tags.values())} in {window} (" + ", ".join(f"{t} ×{n}" for t, n in sorted(tags.items(), key=lambda kv: -kv[1]))
+                    + ")") if tags else f"none in {window}"
+        game_updates = f"{len(updates)} in {window}" if updates else f"none in {window}"
         if excused:
             game_updates += f" ({excused} brief outage{'s' if excused != 1 else ''} during them)"
         build = ", ".join(b.split("/")[-1] for b in (self.ctx["state"].get("game_site") or {}).get("bundles", []) if b.endswith(".js"))
@@ -1608,6 +1657,20 @@ class ContractHistoryWatcher(Watcher):
 
 
 HAZARD_LABELS = {"flare": ("☀️", "SOLAR FLARE")}
+# A flare's proton storm (since 2026-11-05): /defense hazardIncidents[].size, the UEG Space Weather Office's
+# rating. While it lasts, the sensors of craft that can't take it are blinded: they drop out of our detection
+# net, and rivals can slip past. Radiation shields (each doubles what a craft can take) shorten it; ships
+# docked at our station are sheltered. Only "strong" seen so far; the others are from the game's glossary.
+PROTON_STORMS = {"minor": "S1 minor", "strong": "S3 strong", "severe": "S4 severe"}
+
+
+def proton_storm_text(size):
+    """The flare forecast's proton storm line, or "" if the forecast has no rating."""
+    if not size:
+        return ""
+    rating = PROTON_STORMS.get(str(size).lower(), str(size))
+    return (f" Proton storm **{rating}**: sensors of craft without enough radiation shielding are blinded "
+            f"for a while, so rivals can slip past where they watch (ships docked at our station are sheltered).")
 
 
 def hazard_label(incident):
@@ -1711,7 +1774,7 @@ class DefenseWatcher(Watcher):
                     if i.get("startDay") else "Landing time unknown"
                 until = f" and lasts until {clock.stamp(game_day=i['endDay'])}" if i.get("endDay") else ""
                 lines.append(f"{icon} **[{label} FORECAST]** {clock.stamp(game_day=i.get('forecastDay'))} "
-                             f"{when}{until}.")
+                             f"{when}{until}." + proton_storm_text(i.get("size")))
 
             new_damage = [d for d in damage if isinstance(d.get("id"), int) and d["id"] > self.newest_damage]
             events = {}

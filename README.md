@@ -96,7 +96,7 @@ Less tested than Linux, but the bridge and its test run work there.
    ```
 5. Run it for real with `py sol_watch.py --silent` and leave the window open (minimised is fine). To start it with Windows, press Win+R, type `shell:startup`, and in that folder make a shortcut with the target `py C:\sol-watch\sol_watch.py --silent` and "Start in" `C:\sol-watch`.
 
-Windows has no service watchdog here, so if the PC sleeps or the window is closed, the bridge stops. The daily 🟢 status post is how you notice.
+Windows has no service watchdog here, so if the PC sleeps or the window is closed, the bridge stops. The 🟢 status posts (`status_times`) are how you notice: if one doesn't arrive, the bridge isn't running.
 
 ## Running it on Linux
 
@@ -152,14 +152,14 @@ Two files, both next to `sol_watch.py`. Neither is ever part of a download, so u
 | Section | Settings (default) |
 | --- | --- |
 | `[contracts]` | `tier_filter` (mid): `newcomer` posts every tier, `mid` hides newcomer offers, `leader` posts only leader offers; faction and special offers, which have no tier, are always posted. `alliance_job_min_level` (easy), `alliance_job_digest_at` (3). |
-| `[alerts]` | `countdown_warnings_hours` (72, 48, 24, 12, 4, 1): real hours before something runs out or fills up. `research_warning_minutes` (5), `deal_expiry_warning_minutes` (60), `stall_repeat_hours` (6), `ignored_stall_reasons` (paused, keepLimit: both your own choice), `standing_alert_step` (1.0), `daily_status_hour` (8, or `off`), `game_update_posts` (no). |
+| `[alerts]` | `countdown_warnings_hours` (72, 48, 24, 12, 4, 1): real hours before something runs out or fills up. `research_warning_minutes` (5), `deal_expiry_warning_minutes` (60), `stall_repeat_hours` (6), `ignored_stall_reasons` (paused, keepLimit: both your own choice), `standing_alert_step` (1.0), `status_times` (08:00): times of day for the 🟢 status post, as many as you like (e.g. `06:00, 16:00`), or `off`; `game_update_posts` (no). The older `daily_status_hour` (one whole hour) still works. |
 | `[incoming]` | `ignore_earth_moon` (yes): rival warships heading for Earth and Moon space, where no fighting is allowed, are only logged; while we're marked hostile to an alliance or branded terrorists they alert there too. `ignore_places` (none), `ignore_companies` (UEG Navy). |
 | `[derelicts]` | `check_minutes` (60, at least 10, or `off`, which skips the 1.3 MB craft map entirely), `min_value` (500, in $M). |
 | `[time]` | `irl_timezone` (the machine's zone): e.g. `Europe/London`. Used for the log files and the daily status hour; Discord shows real times in each viewer's own zone. Servers are often set to UTC. |
 | `[updates]` | `update_check` (yes), and for a fork `project_url` and `source_url`. |
 | `[intervals]` | Seconds between checks of each part of the API, at least 10. The defaults use about 21 of the API's 60 reads a minute per key; the bridge warns if yours add up to more than 40. |
 
-The daily 🟢 BRIDGE STATUS post gives the version, uptime, polls, game updates and problems in the last 24 h, and the game build. Brief server outages (HTTP 502/503/504 or a dropped connection) within 10 minutes of an update going live are counted with the update ("2 brief outages during them"), not as problems; `errors.log` still records them all.
+The 🟢 BRIDGE STATUS post gives the version, uptime, polls, and the game updates and problems since the previous status post (at most 24 h), and the game build. If the bridge was down over one or more of the times, it posts once when it's back. Brief server outages (HTTP 502/503/504 or a dropped connection) within 10 minutes of an update going live are counted with the update ("2 brief outages during them"), not as problems; `errors.log` still records them all.
 
 `DERELICT_CHECK_MINUTES`, `DERELICT_MIN_VALUE` and `IRL_TIMEZONE` still work in `.env` too, as in earlier versions, and win over `settings.ini`.
 
