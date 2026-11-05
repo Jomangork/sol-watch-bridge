@@ -1,0 +1,8 @@
+# Your secrets and the bridge's own working files: never upload these.
+.env
+state.json
+sol_watch.lock
+logs/
+captures/
+.venv/
+__pycache__/
