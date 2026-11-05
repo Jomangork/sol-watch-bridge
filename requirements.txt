@@ -1,0 +1,2 @@
+requests>=2.25
+tzdata  # time zone data for IRL_TIMEZONE on systems without it

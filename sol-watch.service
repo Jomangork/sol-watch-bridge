@@ -1,0 +1,23 @@
+# systemd service for SOL-Watch. Setup steps are in README.md.
+# Replace YOUR_USER and the /home/YOUR_USER/sol-watch paths before installing.
+[Unit]
+Description=SOL-Watch Discord notification bridge
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+# The bridge tells systemd when it's ready and checks in at least every 10 s;
+# if it freezes for WatchdogSec, systemd restarts it.
+Type=notify
+NotifyAccess=main
+WatchdogSec=600
+TimeoutStartSec=infinity
+User=YOUR_USER
+WorkingDirectory=/home/YOUR_USER/sol-watch
+ExecStart=/home/YOUR_USER/sol-watch/.venv/bin/python -u sol_watch.py --silent
+Environment=PYTHONUNBUFFERED=1
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=multi-user.target

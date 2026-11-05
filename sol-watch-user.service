@@ -1,0 +1,28 @@
+# systemd USER service: runs the bridge as you, with no sudo needed to install or restart it.
+#   mkdir -p ~/.config/systemd/user && cp sol-watch-user.service ~/.config/systemd/user/sol-watch.service
+#   (edit WorkingDirectory below if the bridge isn't in ~/sol-watch)
+#   systemctl --user daemon-reload && systemctl --user enable --now sol-watch
+#   sudo loginctl enable-linger $USER    # once: start at boot, not only when you log in
+#
+# No network-online.target here: it has no effect on user services. The bridge
+# retries its startup itself until the network and the API are reachable.
+#
+# Watchdog: the bridge checks in with systemd at least every 10 s while it works. If it
+# freezes and stops checking in for WatchdogSec, systemd restarts it (as for a crash).
+# Startup can wait a long time for the network, so it has no start timeout.
+
+[Unit]
+Description=SOL-Watch Discord bridge
+
+[Service]
+Type=notify
+NotifyAccess=main
+WatchdogSec=600
+TimeoutStartSec=infinity
+WorkingDirectory=%h/sol-watch
+ExecStart=/usr/bin/python3 -u sol_watch.py --silent
+Restart=always
+RestartSec=30
+
+[Install]
+WantedBy=default.target
