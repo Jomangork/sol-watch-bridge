@@ -80,7 +80,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.00.00"
+VERSION = "1.01.00"
 HERE = Path(__file__).resolve().parent
 LOG_DIR = HERE / "logs"
 API_BASE = "https://solthegame.com/api/v1"
@@ -120,6 +120,16 @@ GAME_SITE_URL = "https://solthegame.com/"
 GAME_BUNDLE = re.compile(r"assets/[\w.-]+\.(?:js|css)")
 # After an update, wait this long (the server restarts) before re-checking the API spec.
 SPEC_RECHECK_AFTER_UPDATE_SECONDS = 120
+
+# Bridge updates: at startup and once a day, read the VERSION line of sol_watch.py on GitHub (one small
+# request to GitHub, no key or game data sent) and post to the Corp channel while a newer version exists.
+# False turns it off. A fork can point BRIDGE_SOURCE_URL and BRIDGE_PROJECT_URL at its own project.
+UPDATE_CHECK = True
+INTERVAL_UPDATE_CHECK = 86400
+BRIDGE_PROJECT_URL = "https://github.com/Jomangork/sol-watch-bridge"
+BRIDGE_SOURCE_URL = "https://raw.githubusercontent.com/Jomangork/sol-watch-bridge/main/sol_watch.py"
+# A restart within this many seconds of the last notice doesn't repeat it (e.g. several restarts in a row).
+UPDATE_NOTICE_MIN_GAP_SECONDS = 3600
 
 # Warn when something will run out or fill up within these many real hours.
 # (1 game day = 1 real hour, so these match the game's own supply warnings.)
@@ -2899,6 +2909,66 @@ class GameUpdateWatcher(Watcher):
         self.ctx["discord"].post(self.webhook, self.header, [text])
 
 
+REMOTE_VERSION = re.compile(r'^VERSION = "(\d+(?:\.\d+)*)"', re.MULTILINE)
+
+
+def version_tuple(text):
+    """'1.02.00' -> (1, 2, 0), for comparing versions."""
+    return tuple(int(part) for part in text.split("."))
+
+
+class BridgeUpdateWatcher(Watcher):
+    """Posts while a newer version of the bridge itself is published (the VERSION line of sol_watch.py on
+    GitHub): at startup and then once a day, until this copy is upgraded."""
+    interval, header = INTERVAL_UPDATE_CHECK, "BRIDGE UPDATE"
+
+    def __init__(self, ctx, webhook):
+        super().__init__(ctx, webhook)
+        self.checked_at = None  # monotonic time of the last check: --once polls twice, but GitHub is asked once
+
+    def fetch_version(self):
+        """The published VERSION, or None if GitHub couldn't be reached or the file has no VERSION line."""
+        try:
+            # Only the start of the file: VERSION is near the top (the whole file is ~170 KB).
+            response = requests.get(BRIDGE_SOURCE_URL, timeout=20, headers={"Range": "bytes=0-16383"})
+        except requests.RequestException as err:
+            log(f"[Update check] Couldn't reach GitHub ({err}); trying again in a day.")
+            return None
+        if response.status_code not in (200, 206):
+            log(f"[Update check] GitHub answered HTTP {response.status_code}; trying again in a day.")
+            return None
+        found = REMOTE_VERSION.search(response.text)
+        if not found:
+            log("[Update check] No VERSION line in the published sol_watch.py; trying again in a day.")
+            return None
+        return found.group(1)
+
+    def poll(self):
+        if self.checked_at is not None and time.monotonic() - self.checked_at < 60:
+            return
+        self.checked_at = time.monotonic()
+        first = not self.seeded
+        self.seeded = True
+        latest = self.fetch_version()
+        if latest is None:
+            return
+        if version_tuple(latest) <= version_tuple(VERSION):
+            log(f"[Update check] Up to date (v{VERSION}; published: v{latest}).")
+            return
+        log(f"[Update check] v{latest} is available; this bridge runs v{VERSION}.")
+        state = self.ctx["state"]
+        saved = state.get("update_notice") or {}
+        if (first and saved.get("version") == latest
+                and time.time() - (saved.get("at") or 0) < UPDATE_NOTICE_MIN_GAP_SECONDS):
+            return  # told moments ago, before a restart
+        state.set("update_notice", {"version": latest, "at": time.time()})
+        text = (f"🆕 **SOL-Watch {latest} is available** (this bridge runs {VERSION}). Download it from "
+                f"<{BRIDGE_PROJECT_URL}>; CHANGELOG.md there says what changed, and the README's \"Upgrading\" "
+                f"section how to install it. This reminder repeats once a day until the bridge is upgraded.")
+        # Posted even on the first poll, like a game update: it's news whenever the bridge starts.
+        self.ctx["discord"].post(self.webhook, self.header, [text])
+
+
 # ================= MAIN =================
 
 def ask_broadcast():
@@ -3086,6 +3156,10 @@ def main():
         GameUpdateWatcher(ctx, config["corp"]),
         ChatWatcher(ctx),
     ]
+    if UPDATE_CHECK:
+        watchers.append(BridgeUpdateWatcher(ctx, config["corp"]))
+    else:
+        log("[Update check] Off (UPDATE_CHECK = False).")
     ctx["spec_watcher"] = next(w for w in watchers if isinstance(w, ApiSpecWatcher))  # re-checked after a game update
     for watcher in watchers:
         watcher.safe_poll(" at startup")
