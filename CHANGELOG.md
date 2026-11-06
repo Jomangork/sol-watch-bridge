@@ -4,6 +4,23 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.04.04 (Nov 6, 2026)
+
+- **Every derelict by default.** Other companies' derelicts are now posted whatever their salvage value; before, only those worth $500M or more. To keep a floor, set `min_value` under `[derelicts]` in `settings.ini` (or `DERELICT_MIN_VALUE` in `.env`), e.g. `min_value = 500`. `0` now means every derelict; `off` still turns the check off. After upgrading, derelicts already out there below your old floor are posted once.
+
+## 1.04.03 (Nov 5, 2026)
+
+- **Blocked vehicles.** When the game stops one of your freighters, tugs or other vehicles on its route, for example for lack of fuel for the next leg, the bridge now posts it once with the game's reason, where it is and since when. Before, a freighter could sit idle for hours unnoticed. A block that starts while the bridge is stopped is posted when it starts again.
+
+## 1.04.02 (Nov 5, 2026)
+
+- **Salvage races.** If another company salvages a derelict that one of your salvage teams is on its way to, the bridge now posts it, naming your team, so you know the trip will come back empty.
+- **Halcyon Arms Exchange:** a listing that disappears is no longer posted as "sold or withdrawn". The API can't say who bought it or whether it was withdrawn, so the post added nothing; it's now only logged. New listings and factions' purchases are still posted.
+
+## 1.04.01 (Nov 5, 2026)
+
+- **Clearer production stalls.** The game gives one reason per site, which could blame crew for a site that was really out of upkeep goods. Away from Earth, a place out of industrial consumables or maintenance equipment stops all its production, so its stall post now says "can't pay upkeep" and shows the stock of both goods, adding the crew shortage for refineries and factories (mines run without full crew). A site out of a production input shows that input's stock, and one short of crew that makes nothing is said to be missing something else too.
+
 ## 1.04.00 (Nov 5, 2026)
 
 - **Status post at any times you like.** `status_times` in `settings.ini` takes as many times of day as you want, with minutes, e.g. `status_times = 06:00, 16:00` (default `08:00`; `off` for none). Each post now counts problems and game updates since the previous post instead of always the last 24 h. If the bridge was down over several times, it posts once when it's back. The older `daily_status_hour` still works.

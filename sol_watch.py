@@ -81,7 +81,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.04.00"
+VERSION = "1.04.04"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -120,8 +120,9 @@ INTERVAL_PAD_GOALS = 300  # spaceports asking every company for a new launch pad
 # DERELICT_CHECK_MINUTES and DERELICT_MIN_VALUE in .env override these two (and survive upgrades).
 INTERVAL_DERELICTS = 3600
 DERELICT_MIN_INTERVAL = 600  # never more often than every 10 minutes, whatever .env says
-# Post another company's derelict when its salvage value (lootValue, $M) is at least this. None turns it off.
-DERELICT_ALERT_MIN_VALUE: Optional[float] = 500
+# Post another company's derelict when its salvage value (lootValue, $M) is at least this (0: every one).
+# None turns it off.
+DERELICT_ALERT_MIN_VALUE: Optional[float] = 0
 INTERVAL_API_SPEC = 3600  # watch the API itself for new fields
 INTERVAL_GAME_SITE = 300  # the game's web page, to spot game updates
 # Post each new game build to Discord. False: game updates are only logged (and counted in the daily status);
@@ -162,6 +163,10 @@ UPGRADE_DONE_SLACK_DAYS = 0.1
 
 # Production stalls that are our own choice, not problems.
 IGNORED_STALL_REASONS = {"paused", "keepLimit"}
+# Off Earth, a place out of either of these stops all its production; a crew shortage only slows
+# refineries and factories, and mines run without full crew (player, 2026-11-05).
+UPKEEP_GOODS = ("consumables", "equipment")
+CREWED_SITE_KINDS = ("refinery", "factory")
 # Don't re-announce the same site stalling within this many real hours.
 STALL_REPEAT_HOURS = 6
 
@@ -465,7 +470,8 @@ def load_env():
 
 def apply_derelict_settings(minutes, min_value):
     """DERELICT_CHECK_MINUTES and DERELICT_MIN_VALUE from .env, which win over the settings at the top
-    (so they survive an upgrade). "off" (or 0) for either turns the derelict check off."""
+    (so they survive an upgrade). "off" for either turns the derelict check off, as does 0 minutes;
+    a value of 0 posts every derelict."""
     global INTERVAL_DERELICTS, DERELICT_ALERT_MIN_VALUE
     if minutes:
         if minutes.lower() in ("off", "0", "none"):
@@ -477,7 +483,7 @@ def apply_derelict_settings(minutes, min_value):
                 log(f"[Warning] DERELICT_CHECK_MINUTES '{minutes}' isn't a number; "
                     f"checking every {INTERVAL_DERELICTS // 60} minutes.")
     if min_value:
-        if min_value.lower() in ("off", "0", "none"):
+        if min_value.lower() in ("off", "none"):
             DERELICT_ALERT_MIN_VALUE = None
         else:
             try:
@@ -1224,6 +1230,15 @@ class CraftWatcher(Watcher):
         # Names of our craft ever seen as derelicts this run, so NewsWatcher can spot them in the news.
         self.ctx.setdefault("our_derelicts", set()).update(
             m.get("name") for m in missions.values() if m.get("status") == "derelict" and m.get("name"))
+        # Derelicts our salvage teams are heading for (name -> team), so NewsWatcher can tell when a rival takes one.
+        # The target's name is in the team's statement ("Salvage Pueo II-1") or, failing that, the derelict watcher's list.
+        for m in missions.values():
+            if m.get("payloadId") == "salvage_team" and m.get("targetMissionId") and m.get("status") != "complete":
+                statement = m.get("statement") or ""
+                target = (self.ctx.get("derelict_names") or {}).get(m["targetMissionId"]) or \
+                    (statement[len("Salvage "):] if statement.startswith("Salvage ") else None)
+                if target:
+                    self.ctx.setdefault("salvage_targets", {})[target] = m.get("name")
         lines = []
 
         if first:
@@ -1972,16 +1987,24 @@ def body_name(ctx, body_id):
     return (ctx.get("body_names") or {}).get(body_id) or (ctx.get("place_names") or {}).get(body_id) or tidy_id(body_id)
 
 
-def stall_text(stamp, place, reasons, state="stopped"):
+def stall_text(stamp, place, reasons, state="stopped", note=None):
     """One message for the sites that stopped (or slowed) at one place: reasons is {why: ["factory (Steel)", ...]}.
-    A single site keeps the one-line form; several get a count and a line per reason."""
+    A single site keeps the one-line form; several get a count and a line per reason. A note is the cause
+    shared by every site (missing upkeep goods); then a why only adds to it, and may be empty."""
     count = sum(len(sites) for sites in reasons.values())
     icon = "⏸️" if state == "stopped" else "🐢"
     if count == 1:
         why, sites = next(iter(reasons.items()))
+        if note:
+            why = f"{note}. {first_upper(why)}." if why and why != "mines" else note
         return f"{icon} {stamp} **{sites[0]} at {place} {state}:** {why}"
-    head = f"{icon} {stamp} **{count} sites at {place} {state}:**"
-    return head + "".join(f"\n• **{why}:** {', '.join(sites)}" for why, sites in reasons.items())
+    head = f"{icon} {stamp} **{count} sites at {place} {state}:**" + (f" {note}" if note else "")
+    return head + "".join("\n• " + (f"**{why}:** " if why else "") + ", ".join(sites) for why, sites in reasons.items())
+
+
+def qty_text(qty):
+    """A stock amount: '0', '0.75', '2', '1,072'."""
+    return f"{qty:,.0f}" if abs(qty) >= 100 else f"{qty:,.2f}".rstrip("0").rstrip(".")
 
 
 EARTH_ORBITS = {"leo": "LEO", "meo": "MEO", "geo": "GEO"}
@@ -2249,8 +2272,22 @@ class IndustryWatcher(Watcher):
         # the same place in the same poll are posted as one message, grouped by reason.
         # heldBy names what limits a site, not that it stopped: a site short of crew keeps running at reduced
         # output. One still producing (outputPerDay > 0) is posted as "slowed", one producing nothing as "stopped".
+        # The game names one reason per site, so a stall blamed on crew can hide missing upkeep goods: off Earth,
+        # an upkeep good counts as missing where the place has none of it, or a site there names it as its limit.
         stalls, stopped = {}, {}  # stopped: (place name, "stopped"/"slowed") -> {reason text: ["factory (Steel)", ...]}
+        notes = {}  # place_state -> the upkeep stock line, for places stopped by missing upkeep goods
         crew = ctx.get("crew_by_place") or {}
+        kinds, stock = ctx.get("place_kinds") or {}, ctx.get("stock") or {}
+        named = {(s.get("placeId"), s.get("limitingGood")) for s in flows.get("sites", []) if s.get("heldBy") == "upkeep"}
+
+        def upkeep_short(place):
+            if kinds.get(place) in (None, "earth_region"):
+                return False
+            return any((stock.get((place, g)) or (0, 0))[0] <= 0 or (place, g) in named for g in UPKEEP_GOODS)
+
+        def stock_qty(place, good):
+            return qty_text((stock.get((place, good)) or (0, 0))[0])
+
         for site in flows.get("sites", []):
             held, site_id = site.get("heldBy"), site.get("siteId")
             if not held or held in IGNORED_STALL_REASONS:
@@ -2272,24 +2309,69 @@ class IndustryWatcher(Watcher):
                     # The game reports a hazard-hit outpost's sites as short of staff, even crewless mines.
                     # When they work again is in the 🔧 hazard alert.
                     held = "damaged"
-                staff = crew.get(site.get("placeId"))
-                staff_note = f" ({staff[0]:.1f} of {staff[1]:g})" if staff and staff[0] < staff[1] else ""
-                why = {"input": f"out of {limiting}",
-                       "damaged": "outpost hit by a hazard, works again on its own",
-                       "staffing": f"not enough crew{staff_note}",
-                       "upkeep": f"can't pay upkeep ({limiting})"}.get(held, held)
+                place_id = site.get("placeId")
+                staff = crew.get(place_id)
+                short_staffed = staff is not None and staff[0] < staff[1]
+                staff_note = f" ({staff[0]:.1f} of {staff[1]:g})" if staff is not None and short_staffed else ""
+                place_state = (place_name(ctx, place_id), state)
+                if held != "damaged" and state == "stopped" and upkeep_short(place_id):
+                    # Every site there is stopped by it: the stock of both goods heads the post, and refineries
+                    # and factories also get the crew shortage, since that will slow them once goods arrive.
+                    notes[place_state] = "can't pay upkeep (stock: " + ", ".join(
+                        f"{good_name(ctx, g)} {stock_qty(place_id, g)}" for g in UPKEEP_GOODS) + ")"
+                    crew_note = short_staffed and site.get("kind") in CREWED_SITE_KINDS
+                    why = f"crew also short{staff_note}" if crew_note else ("mines" if short_staffed else "")
+                elif held == "staffing" and state == "stopped" and short_staffed:
+                    # A crew shortage only slows a site, so one making nothing is missing something else too.
+                    why = f"crew is short{staff_note}, but that only slows production, so something else is missing too"
+                else:
+                    limiting_qty = f" (stock {stock_qty(place_id, site.get('limitingGood'))})" \
+                        if held == "input" and site.get("limitingGood") else ""
+                    why = {"input": f"out of {limiting}{limiting_qty}",
+                           "damaged": "outpost hit by a hazard, works again on its own",
+                           "staffing": f"not enough crew{staff_note}",
+                           "upkeep": f"can't pay upkeep ({limiting})"}.get(held, held)
                 what = f"{site.get('kind')} ({good_name(ctx, site.get('goodId'))})"
-                place_state = (place_name(ctx, site.get("placeId")), state)
                 stopped.setdefault(place_state, {}).setdefault(why, []).append(what)
         for (place, state), reasons in stopped.items():
-            lines.append(stall_text(clock.stamp(), place, reasons, state))
+            lines.append(stall_text(clock.stamp(), place, reasons, state, notes.get((place, state))))
         self.stalls = stalls
         self.countdown.prune()
+        lines += self.blocked_vehicles(industry, first)
 
         if first:
             summary = f"🏭 **[INDUSTRY]** {len(stalls)} sites held up (inputs, crew or upkeep)"
             lines.append(summary + (" | Running out or filling up within 72h:\n" + "\n".join(f"• {s}" for s in soon)
                                     if soon else " | nothing running out within 72h"))
+        return lines
+
+
+    def blocked_vehicles(self, industry, first):
+        """Our freighters, tugs and trucks the game has stopped on their route ("needs 105 kg of fusion fuel more for
+        this leg..."): vehicles[].blocked = {reason, since}. Each block is posted once; the ones posted are saved in
+        state.json (vehicle id -> since), so a restart repeats none and still posts one that started while stopped.
+        The first run ever only records them."""
+        ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx.get("state")
+        blocked = {str(v["id"]): v for v in (industry.get("industry") or {}).get("vehicles", [])
+                   if "id" in v and isinstance(v.get("blocked"), dict)}
+        seen = state.get("vehicles_blocked") if state else getattr(self, "vehicles_blocked", None)
+        lines = []
+        if seen is not None:
+            for key, v in blocked.items():
+                since = v["blocked"].get("since")
+                if seen.get(key) == since:
+                    continue
+                kind = tidy_id(v.get("kind") or "vehicle").lower()
+                when = f" since {clock.stamp(game_day=since)}" if since else ""
+                lines.append(f"🚧 {clock.stamp()} **{first_upper(kind)} {v.get('name')} is blocked at "
+                             f"{place_name(ctx, v.get('regionId'))}**{when}: {v['blocked'].get('reason') or 'no reason given'}")
+        seen = {key: v["blocked"].get("since") for key, v in blocked.items()}
+        if state:
+            state.set("vehicles_blocked", seen)
+        self.vehicles_blocked = seen
+        if first and lines and ctx.get("discord"):  # blocked while we were stopped: post even after a --silent start
+            ctx["discord"].post(self.webhook, self.header, lines)
+            return []
         return lines
 
 
@@ -2604,9 +2686,9 @@ class FactionsWatcher(Watcher):
 
         # Halcyon Arms Exchange: warships listed for sale ({sid, name, unitId, price, listedDay}),
         # one line per batch, and our purchases (our standing there).
-        # Our own purchases (brokerBought) aren't posted: we made them. A listing we bought isn't posted as
-        # "sold or withdrawn" either. Factions' purchases come from the news (NewsWatcher); other companies'
-        # aren't reported anywhere, so theirs show only as "sold or withdrawn".
+        # Our own purchases (brokerBought) aren't posted: we made them. Factions' purchases come from the news
+        # (NewsWatcher). Other companies' purchases and withdrawn listings aren't reported anywhere, so a listing
+        # that disappears is only logged.
         listings = {str(i.get("sid", item_key(i))): i for i in data.get("shipbroker") or []}
         bought = data.get("brokerBought")
         ours = bought - self.bought if bought is not None and self.bought is not None and bought > self.bought else 0
@@ -2620,10 +2702,9 @@ class FactionsWatcher(Watcher):
             if ours:
                 log(f"[Exchange] We bought {ours} ship(s); gone from the list: "
                     + (self.listing_summary(gone) if gone else "none"))
-            if gone and len(gone) > ours:  # with a purchase of ours we can't tell which went to us: say so
+            if gone and len(gone) > ours:  # who took them isn't in the API, so this is logged, not posted
                 note = f" (we bought {ours} of them)" if ours else ""
-                lines.append(f"🛒 {clock.stamp()} Halcyon Arms Exchange: sold or withdrawn: "
-                             f"{self.listing_summary(gone)}{note}")
+                log(f"[Exchange] Sold or withdrawn: {self.listing_summary(gone)}{note}")
         self.listings = listings
         if bought is not None:
             self.bought = bought
@@ -2899,7 +2980,8 @@ class RecordsWatcher(Watcher):
 
 
 class NewsWatcher(Watcher):
-    """Solar News items worth a post: another company salvaging one of our derelicts, and a faction buying
+    """Solar News items worth a post: another company salvaging one of our derelicts or one our salvage team is
+    heading for, and a faction buying
     warships from Halcyon Arms Exchange. (Companies' purchases from the exchange aren't in the news.)
 
     News items: {id, day, companyId, kind, text}.
@@ -2927,6 +3009,10 @@ class NewsWatcher(Watcher):
                         (ours and f"abandoned by {ours}" in text)
                         or any(name and name in text for name in ctx.get("our_derelicts", ()))):
                     lines.append(f"🏴‍☠️ {when} **One of our derelicts was salvaged:** {text}")
+                elif kind == "salvage" and n.get("companyId") != ctx["company_id"] and (
+                        team := next((t for name, t in (ctx.get("salvage_targets") or {}).items()
+                                      if f"derelict {name}," in text), None)):
+                    lines.append(f"🏴‍☠️ {when} **A derelict our salvage team {team} was heading for was taken:** {text}")
                 elif kind == "faction" and text.startswith("Halcyon Arms Exchange sold"):
                     lines.append(f"🛒 {when} **Faction warship purchase:** {text}")
         state.set("news_seen_id", newest)
@@ -3003,6 +3089,9 @@ class DerelictWatcher(Watcher):
         ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
         if DERELICT_ALERT_MIN_VALUE is None:
             return []
+        # Every derelict's name, for the salvage teams we send (CraftWatcher), whatever its value.
+        ctx["derelict_names"] = {m["id"]: m.get("name") for m in data.get("missions") or []
+                                 if "id" in m and m.get("status") == "derelict" and m.get("name")}
         derelicts = {str(m["id"]): m for m in data.get("missions") or []
                      if "id" in m and m.get("status") == "derelict" and m.get("companyId") != ctx["company_id"]
                      and (m.get("lootValue") or 0) >= DERELICT_ALERT_MIN_VALUE}
@@ -3374,6 +3463,7 @@ def main():
         # Planets, moons and asteroids. Not place_names: there "moon" is the Shackleton rim outpost.
         "body_names": {b["id"]: b.get("name", b["id"]) for b in bodies},
         "place_bodies": {p["id"]: p.get("bodyId") for p in places if p.get("bodyId")},
+        "place_kinds": {p["id"]: p.get("kind") for p in places if p.get("kind")},  # "earth_region", "surface", "orbit"
         "launch_sites": {p["id"]: p["launchSite"] for p in places if p.get("launchSite")},  # "south_korea" -> "Naro"
         "good_names": {g["id"]: g.get("name", g["id"]) for g in goods},
         "good_info": {g["id"]: (g.get("category", ""), g.get("massT") or 1) for g in goods},
