@@ -4,6 +4,10 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.04.05 (Nov 6, 2026)
+
+- **Salvage races, fixed:** a salvage team that failed (for example lost at launch) or finished kept counting as heading for its derelict until the bridge restarted, so a rival taking that derelict could be posted as taken from under a team that no longer existed. Only teams still on their way count now, and a new team sent to the same derelict is the one named.
+
 ## 1.04.04 (Nov 6, 2026)
 
 - **Every derelict by default.** Other companies' derelicts are now posted whatever their salvage value; before, only those worth $500M or more. To keep a floor, set `min_value` under `[derelicts]` in `settings.ini` (or `DERELICT_MIN_VALUE` in `.env`), e.g. `min_value = 500`. `0` now means every derelict; `off` still turns the check off. After upgrading, derelicts already out there below your old floor are posted once.

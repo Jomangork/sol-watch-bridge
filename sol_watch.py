@@ -81,7 +81,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.04.04"
+VERSION = "1.04.05"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -1232,13 +1232,17 @@ class CraftWatcher(Watcher):
             m.get("name") for m in missions.values() if m.get("status") == "derelict" and m.get("name"))
         # Derelicts our salvage teams are heading for (name -> team), so NewsWatcher can tell when a rival takes one.
         # The target's name is in the team's statement ("Salvage Pueo II-1") or, failing that, the derelict watcher's list.
+        # Rebuilt every poll from teams still on their way, so a team that failed or finished no longer counts.
+        targets = {}
         for m in missions.values():
-            if m.get("payloadId") == "salvage_team" and m.get("targetMissionId") and m.get("status") != "complete":
+            if m.get("payloadId") == "salvage_team" and m.get("targetMissionId") \
+                    and m.get("status") in ("preparing", "transit", "active"):
                 statement = m.get("statement") or ""
                 target = (self.ctx.get("derelict_names") or {}).get(m["targetMissionId"]) or \
                     (statement[len("Salvage "):] if statement.startswith("Salvage ") else None)
                 if target:
-                    self.ctx.setdefault("salvage_targets", {})[target] = m.get("name")
+                    targets[target] = m.get("name")
+        self.ctx["salvage_targets"] = targets
         lines = []
 
         if first:
