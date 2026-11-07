@@ -81,7 +81,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.04.05"
+VERSION = "1.05.00"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -116,6 +116,7 @@ DEAL_EXPIRY_WARNING_MINUTES = 60
 INTERVAL_RECORDS = 600    # badges and firsts
 INTERVAL_NEWS = 300       # Solar News, for salvages of our derelicts
 INTERVAL_PAD_GOALS = 300  # spaceports asking every company for a new launch pad's materials (/ueg)
+INTERVAL_PLACES = 21600   # the game's list of places, which can grow without a game update (every 6 hours)
 # Valuable derelicts of other companies: each check downloads the whole craft map (~1.3 MB), so hourly.
 # DERELICT_CHECK_MINUTES and DERELICT_MIN_VALUE in .env override these two (and survive upgrades).
 INTERVAL_DERELICTS = 3600
@@ -523,7 +524,7 @@ SETTINGS_SPEC = (
     ("updates", "source_url", "BRIDGE_SOURCE_URL", "text", None),
 ) + tuple(("intervals", name.lower(), f"INTERVAL_{name}", "int", (MIN_POLL_SECONDS, 86400)) for name in (
     "CHAT", "CRAFT", "MINING", "CONTRACTS", "HISTORY", "RESEARCH", "DEFENSE", "COMPANY", "INDUSTRY",
-    "FLEET_MAP", "FLEETS", "SLOW", "DIPLOMACY", "RECORDS", "NEWS", "PAD_GOALS", "API_SPEC", "GAME_SITE"))
+    "FLEET_MAP", "FLEETS", "SLOW", "DIPLOMACY", "RECORDS", "NEWS", "PAD_GOALS", "PLACES", "API_SPEC", "GAME_SITE"))
 OFF_WORDS = {"off", "none", "no", "false", "0"}
 
 
@@ -2104,10 +2105,11 @@ class CompanyWatcher(Watcher):
                    and not IGNORED_QUEUE_REASONS.match(q["reason"])}
         for queue_id, q in blocked.items():
             if not first and self.blocked.get(queue_id, {}).get("reason") != q["reason"]:
-                lines.append(f"🚧 {clock.stamp()} **Queued action blocked:** {q['reason']}{self.blocked_eta(q['reason'])}")
+                lines.append(f"🚧 {clock.stamp()} {queue_heading(q)} {q['reason']}{self.blocked_eta(q['reason'])}")
         if first and blocked:
             lines.append(f"🚧 **[QUEUE]** {len(blocked)} queued action(s) blocked:\n" +
-                         "\n".join(f"• {q['reason']}{self.blocked_eta(q['reason'])}" for q in blocked.values()))
+                         "\n".join(f"• {queue_label(q)}{q['reason']}{self.blocked_eta(q['reason'])}"
+                                    for q in blocked.values()))
         self.blocked = blocked
 
         # Research queue running dry. When research finishes, the game moves the next queued item into
@@ -2144,6 +2146,34 @@ class CompanyWatcher(Watcher):
                 lines.append("🥫 **[SUPPLIES]** Running low: " +
                              ", ".join(f"{place_name(ctx, p)} ({hours_text(h)})" for p, h in low))
         return lines
+
+
+def queued_launch(q):
+    """(name or None, purpose or None) of a queued launch, or None for any other queued action. The purpose is
+    the launch's statement ("Crew for an outpost on Pallas") or else the game's label for it."""
+    action = q.get("action") or {}
+    if action.get("kind") != "launch":
+        return None
+    request = action.get("request") or {}
+    return request.get("name"), request.get("statement") or action.get("label")
+
+
+def queue_heading(q):
+    """The bold start of a blocked-queue post: a launch by its name and purpose when the game gives them."""
+    launch = queued_launch(q)
+    if not launch:
+        return "**Queued action blocked:**"
+    name, about = launch
+    return f"**Queued launch{' ' + name if name else ''} blocked**{f' ({about})' if about else ''}:"
+
+
+def queue_label(q):
+    """The same for a line of the startup list: "Queued launch Footman-11 (…): ", or "" for other actions."""
+    launch = queued_launch(q)
+    if not launch:
+        return ""
+    name, about = launch
+    return f"Queued launch{' ' + name if name else ''}{f' ({about})' if about else ''}: "
 
 
 def keep_limited_fill_days(ctx, store, stocks, keep, has_tank=True):
@@ -3026,6 +3056,50 @@ class NewsWatcher(Watcher):
         return lines
 
 
+class PlaceWatcher(Watcher):
+    """New places (landing sites, stations, regions) in /reference/places, which the game has added without a
+    game update or an API change (seen 2026-11-07: seven sites on Juno, Hygiea and Camilla). Also keeps the
+    names the other watchers use up to date, which were otherwise read only at startup. Known ids are saved
+    in state.json, so a place added while the bridge was stopped is still posted."""
+    path, interval, header = "/reference/places", INTERVAL_PLACES, "NEW PLACES"
+
+    def update(self, data, first):
+        ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
+        places = [p for p in data.get("places") or [] if p.get("id")]
+        if not places:
+            return []
+        ctx["place_names"].update({p["id"]: p.get("name", p["id"]) for p in places})
+        ctx["place_bodies"].update({p["id"]: p["bodyId"] for p in places if p.get("bodyId")})
+        ctx["place_kinds"].update({p["id"]: p["kind"] for p in places if p.get("kind")})
+        ids = {p["id"] for p in places}
+        known = state.get("places_known")
+        state.set("places_known", sorted(ids))
+        if known is None:  # the first run ever: record without announcing
+            return []
+        gone = set(known) - ids
+        if gone:
+            log(f"[Places] No longer listed: {', '.join(sorted(gone))}")
+        new = [p for p in places if p["id"] not in set(known)]
+        by_body = {}
+        for p in new:
+            by_body.setdefault(p.get("bodyId"), []).append(p)
+        lines = []
+        for body_id, group in by_body.items():
+            sites = "\n".join(f"• **{p.get('name', p['id'])}**{self.deposits_text(p)}" for p in group)
+            lines.append(f"🗺️ {clock.stamp()} **{len(group)} new place(s) at {body_name(ctx, body_id)}:**\n{sites}")
+        if first and lines:  # added while we were stopped: still worth posting, even after a --silent start
+            ctx["discord"].post(self.webhook, self.header, lines)
+            return []
+        return lines
+
+    def deposits_text(self, place):
+        """' (orbit station)' or the richest deposits, e.g. ' (Iron/nickel 5, PGM ore 3, Anorthite 3)'."""
+        if place.get("kind") == "orbit":
+            return " (orbit station)"
+        best = sorted((place.get("deposits") or {}).items(), key=lambda item: -item[1])[:3]
+        return f" ({', '.join(f'{good_name(self.ctx, good)} {grade}' for good, grade in best)})" if best else ""
+
+
 class PadGoalWatcher(Watcher):
     """Spaceports' community goals for a new launch pad (/ueg → rangeExpansions), which every company may fill.
 
@@ -3314,7 +3388,7 @@ WATCHER_INTERVALS = {
     "DiscoveriesWatcher": "INTERVAL_SLOW", "AccountWatcher": "INTERVAL_SLOW",
     "DiplomacyWatcher": "INTERVAL_DIPLOMACY", "RecordsWatcher": "INTERVAL_RECORDS", "NewsWatcher": "INTERVAL_NEWS",
     "PadGoalWatcher": "INTERVAL_PAD_GOALS", "ApiSpecWatcher": "INTERVAL_API_SPEC",
-    "GameUpdateWatcher": "INTERVAL_GAME_SITE",
+    "GameUpdateWatcher": "INTERVAL_GAME_SITE", "PlaceWatcher": "INTERVAL_PLACES",
 }
 
 
@@ -3501,6 +3575,7 @@ def main():
         DiscoveriesWatcher(ctx, config["alliance"]),
         NewsWatcher(ctx, config["corp"]),
         PadGoalWatcher(ctx, config["general"]),
+        PlaceWatcher(ctx, config["general"]),
         ApiSpecWatcher(ctx, config["corp"]),
         GameUpdateWatcher(ctx, config["corp"]),
         ChatWatcher(ctx),

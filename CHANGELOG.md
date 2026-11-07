@@ -4,6 +4,15 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.05.00 (Nov 7, 2026)
+
+- **New places.** The game can add landing sites and stations without a game update or any change to the API (seven asteroid sites appeared this way on Nov 7). The bridge now checks the game's list of places every 6 hours and posts new ones to the general channel, grouped by world, with each site's three richest deposits. A place added while the bridge was stopped is posted when it starts again; the first run only records what's there.
+- **Place names stay current.** Names were read only at startup, so a new site showed as a code like "Hygiea/a" until a restart. The same check now refreshes them.
+
+## 1.04.06 (Nov 7, 2026)
+
+- **Blocked launches by name.** A queued launch the game is holding back (all launch teams busy, parts on the way) is now posted with the craft's name and what it's for, e.g. "Queued launch Kestrel-3 blocked (Crew for an outpost on Ceres): …", instead of only the reason, so two such posts can be told apart. Without a name, the game's label for the launch is used. Other queued actions are posted as before.
+
 ## 1.04.05 (Nov 6, 2026)
 
 - **Salvage races, fixed:** a salvage team that failed (for example lost at launch) or finished kept counting as heading for its derelict until the bridge restarted, so a rival taking that derelict could be posted as taken from under a team that no longer existed. Only teams still on their way count now, and a new team sent to the same derelict is the one named.
