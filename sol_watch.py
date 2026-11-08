@@ -81,7 +81,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.05.00"
+VERSION = "1.05.01"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -129,6 +129,8 @@ INTERVAL_GAME_SITE = 300  # the game's web page, to spot game updates
 # Post each new game build to Discord. False: game updates are only logged (and counted in the daily status);
 # a change to the API they bring is still posted, by the API spec check.
 GAME_UPDATE_POSTS = False
+# Post new places (landing sites, stations) the game adds. False: they're only logged; names refresh either way.
+NEW_PLACE_POSTS = False
 GAME_SITE_URL = "https://solthegame.com/"
 # The web client's code files carry a fingerprint that changes with each build: assets/index-LPebQ6Gw.js
 GAME_BUNDLE = re.compile(r"assets/[\w.-]+\.(?:js|css)")
@@ -513,6 +515,7 @@ SETTINGS_SPEC = (
     ("alerts", "status_times", "STATUS_TIMES", "times", None),
     ("alerts", "daily_status_hour", "DAILY_STATUS_HOUR", "hour", None),  # older, one whole hour
     ("alerts", "game_update_posts", "GAME_UPDATE_POSTS", "bool", None),
+    ("alerts", "new_place_posts", "NEW_PLACE_POSTS", "bool", None),
     ("incoming", "ignore_earth_moon", "INCOMING_IGNORE_EARTH_MOON", "bool", None),
     ("incoming", "ignore_places", "INCOMING_IGNORE_PLACES", "set", None),
     ("incoming", "ignore_companies", "INCOMING_IGNORE_COMPANIES", "set", None),
@@ -3058,9 +3061,10 @@ class NewsWatcher(Watcher):
 
 class PlaceWatcher(Watcher):
     """New places (landing sites, stations, regions) in /reference/places, which the game has added without a
-    game update or an API change (seen 2026-11-07: seven sites on Juno, Hygiea and Camilla). Also keeps the
-    names the other watchers use up to date, which were otherwise read only at startup. Known ids are saved
-    in state.json, so a place added while the bridge was stopped is still posted."""
+    game update or an API change (seen 2026-11-07: seven sites on Juno, Hygiea and Camilla). Keeps the names
+    the other watchers use up to date, which were otherwise read only at startup. New places are logged, and
+    posted only with NEW_PLACE_POSTS. Known ids are saved in state.json, so one added while the bridge was
+    stopped is still reported."""
     path, interval, header = "/reference/places", INTERVAL_PLACES, "NEW PLACES"
 
     def update(self, data, first):
@@ -3087,6 +3091,10 @@ class PlaceWatcher(Watcher):
         for body_id, group in by_body.items():
             sites = "\n".join(f"• **{p.get('name', p['id'])}**{self.deposits_text(p)}" for p in group)
             lines.append(f"🗺️ {clock.stamp()} **{len(group)} new place(s) at {body_name(ctx, body_id)}:**\n{sites}")
+        if not NEW_PLACE_POSTS:
+            for line in lines:
+                log("[Places] " + line.replace("\n", " "))
+            return []
         if first and lines:  # added while we were stopped: still worth posting, even after a --silent start
             ctx["discord"].post(self.webhook, self.header, lines)
             return []

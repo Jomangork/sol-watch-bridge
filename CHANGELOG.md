@@ -4,6 +4,10 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.05.01 (Nov 7, 2026)
+
+- **New places are logged, not posted.** A new landing site isn't urgent and can't be reached for days, so 1.05.00's post is now off by default: new places go to `bridge.log`, and names still refresh. To post them as before, set `new_place_posts = yes` under `[alerts]` in `settings.ini`.
+
 ## 1.05.00 (Nov 7, 2026)
 
 - **New places.** The game can add landing sites and stations without a game update or any change to the API (seven asteroid sites appeared this way on Nov 7). The bridge now checks the game's list of places every 6 hours and posts new ones to the general channel, grouped by world, with each site's three richest deposits. A place added while the bridge was stopped is posted when it starts again; the first run only records what's there.
