@@ -61,6 +61,7 @@ API behaviour this script relies on (checked against the live API, Nov 2026):
 import hashlib
 import json
 import logging
+import math
 import os
 import re
 import socket
@@ -81,7 +82,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.05.01"
+VERSION = "1.05.02"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -216,6 +217,12 @@ STANDING_GAIN = {"easy": 2, "medium": 4, "hard": 10, "contract": 10}
 RIVAL_PENALTY = 5
 # A faction at or below this refuses to let us complete its contracts.
 REFUSES_CONTRACTS_AT = -50
+# Standing pace (game build CJPZkdZn): a gain is worth 1 − standing/120 of itself, and each faction (and the UEG)
+# gives at most a set amount a real day before that, enough to climb from 0 to its top tier in 30 real days
+# (faction Paragon 90, UEG Guardian 75). Losses are never limited. /factions standingPaceToday is what we've used.
+STANDING_PACE_FALLOFF = 120
+STANDING_PACE_REAL_DAYS = 30
+STANDING_PACE_TOP = {"faction": 90, "ueg": 75}
 
 # New faction alliance jobs: the easiest level worth announcing ("easy", "medium" or "hard"),
 # and how many arriving at once become one digest instead of separate posts.
@@ -225,6 +232,8 @@ JOB_LEVELS = {"easy": 0, "medium": 1, "hard": 2}
 
 # Real seconds of warning before research completes.
 RESEARCH_WARNING_SECONDS = 300
+# The game can take a few minutes to start the next queued research; the lab only counts as idle after this.
+RESEARCH_START_GRACE_SECONDS = 600
 
 # The read limit is 60/min per key (burst 30); spacing every request keeps us
 # far below it even when several watchers fall due at once.
@@ -1169,6 +1178,7 @@ class ResearchWatcher(Watcher):
     def __init__(self, ctx, webhook):
         super().__init__(ctx, webhook)
         self.known, self.tech_id = set(), None
+        self.waiting = None  # (names finished, time.time()) while the game hasn't yet started the queued next one
 
     def update(self, data, first):
         clock, names = self.ctx["clock"], self.ctx["tech_names"]
@@ -1191,13 +1201,33 @@ class ResearchWatcher(Watcher):
             if started:
                 lines.append(f"🔬 {clock.stamp(game_day=job.get('startDay'))} Started **{names.get(tech_id, tech_id)}**\n"
                              f"Expected completion: {clock.stamp(game_day=job.get('completeDay'))}")
-            elif not tech_id and finished:
+            queue = self.ctx.get("research_queue")
+            if tech_id:
+                self.waiting = None
+            elif finished and queue:
+                # The game can take minutes to move the next queued item into the lab (seen: about 3 minutes).
+                self.waiting = (finished, time.time())
+            elif finished:
                 # The company watcher warns earlier, when the queue empties; this is the lab actually stopping.
                 lines = [f"🏁 {clock.stamp()} **{', '.join(finished)}** research finished - "
                          f"⚠️ **nothing else started, the lab is now idle.** Queue new research!"]
-            elif not tech_id and self.tech_id:
+            elif self.tech_id:
                 lines.append(f"💤 {clock.stamp()} Research on **{names.get(self.tech_id, self.tech_id)}** stopped - "
                              f"the lab is idle.")
+            if self.waiting and not tech_id and (not queue or time.time() - self.waiting[1] >= RESEARCH_START_GRACE_SECONDS):
+                done, since = self.waiting
+                minutes = max(1, round((time.time() - since) / 60))
+                if queue:
+                    head = queue[0]
+                    head_id = (head.get("action") or {}).get("techId")
+                    reason = f": {head['reason']}" if head.get("reason") else ""
+                    held = (f" **{names.get(head_id, head_id)}** is next in the queue ({len(queue)} queued) "
+                            f"but hasn't started{reason}")
+                else:
+                    held = " The queue has emptied since."
+                lines.append(f"🏁 {clock.stamp()} ⚠️ **The lab is idle**, {minutes} min after **{', '.join(done)}** "
+                             f"finished.{held}")
+                self.waiting = None
 
         # Five real minutes before the current job completes.
         reminders = self.ctx["reminders"]
@@ -1408,28 +1438,51 @@ def policy_name(policy):
 STANDING_IF_DONE = "If done: "
 
 
+def standing_day_cap(party):
+    """Raw standing a faction ("faction") or the UEG ("ueg") gives at most in a real day: 5.5 and 3.9."""
+    top = STANDING_PACE_TOP[party]
+    return -STANDING_PACE_FALLOFF / STANDING_PACE_REAL_DAYS * math.log(1 - top / STANDING_PACE_FALLOFF)
+
+
+def standing_room(ctx, party_id):
+    """Raw standing still to earn today with a faction id or "ueg" (what's left of the day's allowance)."""
+    used = (ctx.get("standing_pace") or {}).get(party_id) or 0
+    return max(0.0, standing_day_cap("ueg" if party_id == "ueg" else "faction") - used)
+
+
+def standing_gain_today(ctx, faction_id, gain):
+    """What a raw gain is worth now: cut to today's room, then by the returns at our standing (the game's VKe)."""
+    current = (ctx.get("standing") or {}).get(faction_id) or 0
+    return min(gain, standing_room(ctx, faction_id)) * max(0.0, 1 - max(0.0, current) / STANDING_PACE_FALLOFF)
+
+
 def standing_advice(ctx, faction_id, gain, hits_rivals):
     """One line on what a job would do to our standing, e.g.
-    'If done: +10 Morningstar (+92 → +100), −5 C-7 (+6 → +1), −5 UBN (−54 → −59)'
+    'If done: +1.3 Morningstar (+92 → +93), −5 C-7 (+6 → +1), −5 UBN (−54 → −59)'
     plus tier changes and a ⛔ if the client refuses our contracts. '' for non-faction clients.
+    The gain is what the standing pace lets through today; rivals' losses are never limited.
     No 🏛️: that's kept for standing that has actually changed."""
     if not faction_id or faction_id not in FACTION_RIVALS:
         return ""
     standing = ctx.get("standing") or {}
     parts, changes = [], []
 
-    def move(fid, delta):
+    def move(fid, delta, text):
         old = standing.get(fid)
         if old is None:
-            return f"{signed(delta)} {faction_short(fid)}"
+            return f"{text} {faction_short(fid)}"
         new = max(-100.0, min(100.0, old + delta))
         if standing_tier(new) != standing_tier(old):
             changes.append(f"{faction_short(fid)} {'drops' if new < old else 'rises'} to **{standing_tier(new)}**")
-        return f"{signed(delta)} {faction_short(fid)} ({signed(old)} → {signed(new)})"
+        return f"{text} {faction_short(fid)} ({signed(old)} → {signed(new)})"
 
-    parts.append(move(faction_id, gain))
+    earned = standing_gain_today(ctx, faction_id, gain) if gain > 0 else gain
+    if gain > 0 and earned < 0.05:
+        parts.append(f"no standing with {faction_short(faction_id)} (capped today)")
+    else:
+        parts.append(move(faction_id, earned, signed_tenths(earned)))
     if hits_rivals:
-        parts += [move(rival, -RIVAL_PENALTY) for rival in sorted(FACTION_RIVALS[faction_id])]
+        parts += [move(rival, -RIVAL_PENALTY, signed(-RIVAL_PENALTY)) for rival in sorted(FACTION_RIVALS[faction_id])]
     text = STANDING_IF_DONE + ", ".join(parts)
     if changes:
         text += " | ⚠️ " + "; ".join(changes)
@@ -1443,6 +1496,11 @@ def standing_advice(ctx, faction_id, gain, hits_rivals):
 def signed(value):
     """'+4', '−54' (a real minus sign, as the game shows it)."""
     return f"{value:+.0f}".replace("-", "−")
+
+
+def signed_tenths(value):
+    """'+2.3', or '+4' when it's a whole number."""
+    return signed(value) if abs(value - round(value)) < 0.05 else f"{value:+.1f}".replace("-", "−")
 
 
 def describe_offer(offer, clock):
@@ -2127,6 +2185,7 @@ class CompanyWatcher(Watcher):
                       f"{clock.stamp(game_day=job.get('completeDay'))} - queue more before then." if job else ""
             lines.append(f"📭 {clock.stamp()} **The research queue is empty.**{current}")
         self.research_queue = research_queue
+        ctx["research_queue"] = research_queue  # the research watcher waits for the next one to start
 
         # Crew supplies at each place with crew, warned at each COUNTDOWN_WARNINGS_HOURS mark.
         for place in sustainment:
@@ -2700,6 +2759,13 @@ class FactionsWatcher(Watcher):
         standing = data.get("standing") or {}
         emerged = {f.get("id") for f in data.get("factions", [])}  # e.g. mars_republic has standing but hasn't formed
         lines = []
+        has_pace = "standingPaceToday" in data
+        pace = data.get("standingPaceToday") or {}
+        old_pace = self.ctx.get("standing_pace")
+        if old_pace and any(pace.get(fid, 0) < used - 1e-6 for fid, used in old_pace.items()):
+            # When the real day turns over isn't documented; this records it.
+            log(f"[Standing pace] Today's allowance reset: used {describe(old_pace)} -> {describe(pace) or 'none'}")
+        self.ctx["standing_pace"] = pace
 
         changed = first or any(abs(value - self.reported.get(fid, value)) >= STANDING_ALERT_STEP or fid not in self.reported
                                for fid, value in standing.items())
@@ -2709,9 +2775,14 @@ class FactionsWatcher(Watcher):
                 delta = value - self.reported.get(fid, value)
                 arrow = f" ({'▲' if delta > 0 else '▼'} {abs(delta):.1f})" if abs(delta) >= 0.05 else ""
                 note = "" if fid in emerged else " _(not yet emerged)_"
-                rows.append(f"• **{FACTION_NAMES.get(fid, fid)}**{note}: {value:+.1f}{arrow}")
+                room = ""
+                if has_pace:
+                    more = standing_gain_today(dict(self.ctx, standing=standing), fid, float("inf"))
+                    room = f" · {more:.1f} more today" if more >= 0.05 else " · capped today"
+                rows.append(f"• **{FACTION_NAMES.get(fid, fid)}**{note}: {value:+.1f}{arrow}{room}")
+            ueg_used = f" · {pace.get('ueg') or 0:.1f} of {standing_day_cap('ueg'):.1f} used today" if has_pace else ""
             rows.append(f"• **UEG (United Earth Government)**: not reported by the API "
-                        f"(Moon months: {data.get('uegColonyStanding', '?')})")
+                        f"(Moon months: {data.get('uegColonyStanding', '?')}){ueg_used}")
             gifts = {fid: v for fid, v in (data.get("shipGiftsToday") or {}).items() if v}
             if gifts:
                 rows.append("• Earned from ship gifts today: " +

@@ -4,6 +4,12 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.05.02 (Nov 8, 2026)
+
+- **Research hand-over, fixed:** when research finished with more in the queue, the bridge could say the lab was idle, because the game can take a few minutes to start the next item (about 3 on Nov 7). Now it posts only "finished" and waits. If nothing has started 10 minutes later, it warns that the lab is idle, naming what's next in the queue and the game's reason for holding it. With an empty queue it still warns at once.
+- **Standing pace.** The game update of Nov 8 caps how much standing a faction gives in a real day (about 5.5; the UEG about 3.9), and makes gains smaller the higher our standing is. The standing table now shows how much more each faction can give today, or "capped today", and how much of the UEG's allowance is used. The day resetting is logged.
+- **Standing advisor follows it.** The "If done:" line on contracts, alliance jobs, ship orders and sieges now shows what a job would really give today, e.g. +1.3 rather than +10 at +92, or "capped today". Rivals' losses are unchanged: the game never limits them.
+
 ## 1.05.01 (Nov 7, 2026)
 
 - **New places are logged, not posted.** A new landing site isn't urgent and can't be reached for days, so 1.05.00's post is now off by default: new places go to `bridge.log`, and names still refresh. To post them as before, set `new_place_posts = yes` under `[alerts]` in `settings.ini`.
