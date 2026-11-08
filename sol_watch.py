@@ -82,7 +82,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.05.02"
+VERSION = "1.07.00"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -115,7 +115,7 @@ INTERVAL_DIPLOMACY = 60   # deals and agreements (offers expire, so check often)
 # Warn this many real minutes before an offer waiting on us expires.
 DEAL_EXPIRY_WARNING_MINUTES = 60
 INTERVAL_RECORDS = 600    # badges and firsts
-INTERVAL_NEWS = 300       # Solar News, for salvages of our derelicts
+INTERVAL_NEWS = 300       # Solar News: pirate raids and thefts, salvages of our derelicts
 INTERVAL_PAD_GOALS = 300  # spaceports asking every company for a new launch pad's materials (/ueg)
 INTERVAL_PLACES = 21600   # the game's list of places, which can grow without a game update (every 6 hours)
 # Valuable derelicts of other companies: each check downloads the whole craft map (~1.3 MB), so hourly.
@@ -235,6 +235,42 @@ RESEARCH_WARNING_SECONDS = 300
 # The game can take a few minutes to start the next queued research; the lab only counts as idle after this.
 RESEARCH_START_GRACE_SECONDS = 600
 
+# Thieves take idle, uncrewed ships at Earth and the Moon; the news says only "A ship slipped its moorings around
+# Earth and the Moon" (seen 2026-11-07 and 11-08), never whose. After one, our ship totals from before it are compared
+# with ours after it for up to this long. Snapshots older than SHIP_HISTORY_SECONDS are dropped.
+THEFT_CHECK_SECONDS = 1800
+SHIP_HISTORY_SECONDS = 7200
+THEFT_NEWS = "slipped its moorings"
+# Market events (shortages and gluts in one region, from the news) are only logged for now, as a test; True posts them.
+MARKET_EVENT_POSTS = False
+
+# Lite mode (since 1.07.00): only what every player sees alike, for a channel anyone may read. It runs from a key
+# with just News and records and Public chat, and reads nothing else. None: lite when the key can't read Company;
+# settings.ini [bridge] mode = full or lite decides it instead.
+BRIDGE_MODE: Optional[str] = None
+LITE_SECTIONS = {"news", "chat"}
+# The only API paths lite mode reads ("" is the key's index); any other read is refused.
+LITE_PATHS = ("", "/news", "/chat", "/companies", "/records", "/memorial", "/clock", "/reference")
+INTERVAL_LITE_COMPANIES = 600  # name changes, bully marks and the earnings leaderboard
+# Solar News kinds lite mode posts, with their icon. A kind not listed in either table is new: posted with 📰.
+LITE_NEWS_ICONS = {
+    "raid": "🏴‍☠️", "hazard": "☀️", "faction": "🛒", "segment": "🚩", "politics": "🗳️", "holiday": "🎉",
+    "strike": "💣", "clear_sky": "✊", "founded": "🆕", "inactive": "🌑", "alliance": "🤝", "colony": "🏘️",
+    "station": "🛰️", "outpost": "📍", "range_expansion": "🚀", "ueg_built": "🏗️", "ueg_navy": "⚓",
+    "ueg_elevator": "🏛️", "badge_first": "🏅", "project_honor": "🏆", "market_event": "📈", "salvage": "♻️",
+    "abandoned": "🛸", "launch_failure": "💥", "outpost_surrendered": "🏳️"}
+# Kinds only counted in the digest: frequent, or posted from elsewhere (crew lost comes from the memorial).
+# Hazard items that hit one craft count here too; flare forecasts are posted.
+LITE_NEWS_NOISE = {  # kind: (one, several)
+    "contract": ("contract won", "contracts won"), "hazard": ("hazard hit", "hazard hits"),
+    "price_move": ("price move", "price moves"), "launch": ("launch", "launches"), "arrival": ("arrival", "arrivals"),
+    "ueg_supplies": ("UEG supply run", "UEG supply runs"), "first": ("world first", "world firsts"),
+    "ore_body": ("asteroid move", "asteroid moves"), "discovery": ("discovery", "discoveries"),
+    "crew_lost": ("crew-lost item (posted from the memorial)", "crew-lost items (posted from the memorial)")}
+# Kinds cut to their first sentence: the rest (what a failed launch carried) is detail to look up in the game.
+LITE_FIRST_SENTENCE_ONLY = {"launch_failure"}
+LITE_FORECAST_RE = re.compile(r"Space Weather Office|forecasts? a solar flare", re.IGNORECASE)
+
 # The read limit is 60/min per key (burst 30); spacing every request keeps us
 # far below it even when several watchers fall due at once.
 REQUEST_SPACING_SECONDS = 1.0
@@ -251,13 +287,15 @@ KEY_SECTIONS = (
     ("company", "Company", "required", ("/me", "/company"),
      "the bridge can't start without it; also blocked queues, crew supplies, construction"),
     ("news", "News and records", "needed", ("/companies", "/news", "/records"),
-     "company names in every post, salvage and faction-purchase news, badges and firsts"),
+     "company names in every post, pirate raids and thefts, salvage and faction-purchase news, badges and firsts"),
     ("craft", "Launches and craft", "needed", ("/craft", "/craft/map"),
      "launches, arrivals, losses, safe mode, derelicts"),
     ("fleets", "Fleets", "needed", ("/fleets", "/fleets/map"), "incoming fleets, battles, our sieges and duels"),
     ("contracts", "Contracts", "needed", ("/contracts", "/contracts/history"),
      "contract board, alliance jobs, ship orders, sieges against us, closed contracts"),
     ("defense", "Defense", "needed", ("/defense",), "hazards, strikes, debris fields, asteroid threats"),
+    ("segments", "Segments", "needed", ("/segments",),
+     "tax and permit rises where our craft are, rivals taking over our claims"),
     ("factions", "Factions", "needed", ("/factions",), "standings, Halcyon Arms Exchange, Earth's government, diplomacy"),
     ("industry", "Industry", "needed", ("/industry", "/industry/flows"),
      "stocks running out, storage filling, production stalls"),
@@ -469,10 +507,11 @@ def load_env():
         "corp": os.environ.get("WEBHOOK_CORP"),
         "general": os.environ.get("WEBHOOK_GENERAL"),
         "alliance": os.environ.get("WEBHOOK_ALLIANCE"),
+        # Lite mode posts everything to one channel: WEBHOOK_LITE, or else the general channel.
+        "lite": os.environ.get("WEBHOOK_LITE") or os.environ.get("WEBHOOK_GENERAL"),
     }
-    missing = [name for name, value in config.items() if not value]
-    if missing:
-        sys.exit(f"Missing settings: {', '.join(missing)}. Put them in {HERE / '.env'} (see .env.example).")
+    if not config["api_key"]:
+        sys.exit(f"Missing settings: SOL_BRIDGE_API_KEY. Put it in {HERE / '.env'} (see .env.example).")
     config["irl_tz"] = load_timezone(os.environ.get("IRL_TIMEZONE", "").strip())
     apply_derelict_settings(os.environ.get("DERELICT_CHECK_MINUTES", "").strip(),
                             os.environ.get("DERELICT_MIN_VALUE", "").strip())
@@ -531,6 +570,7 @@ SETTINGS_SPEC = (
     ("derelicts", "check_minutes", "DERELICT_CHECK_MINUTES", "env", None),
     ("derelicts", "min_value", "DERELICT_MIN_VALUE", "env", None),
     ("time", "irl_timezone", "IRL_TIMEZONE", "env", None),
+    ("bridge", "mode", "BRIDGE_MODE", "choice", ("full", "lite")),
     ("updates", "update_check", "UPDATE_CHECK", "bool", None),
     ("updates", "project_url", "BRIDGE_PROJECT_URL", "text", None),
     ("updates", "source_url", "BRIDGE_SOURCE_URL", "text", None),
@@ -720,6 +760,7 @@ class SolApi:
         self.forbidden = set()     # paths that answered 403: this key may not read them
         self.on_alert: Optional[Callable[[str], None]] = None
         self.expected_forbidden: set = set()  # paths whose section the startup check reported missing
+        self.allowed: Optional[tuple] = None  # lite mode: the only API paths it may read (LITE_PATHS)
 
     def get_latest(self, path, params=None):
         """Like get(), but returns the previous body instead of None when unchanged (304)."""
@@ -736,6 +777,10 @@ class SolApi:
         reader keeps its own ETag, so when two watchers poll one path (factions and diplomacy both read
         /factions), the first to see a change doesn't make the other get "unchanged" and miss it."""
         cache_key = (path, json.dumps(params, sort_keys=True), reader)
+        if self.allowed is not None and not path.startswith("http") and path not in self.allowed and \
+                not any(p and path.startswith(p + "/") for p in self.allowed):
+            log(f"[Lite] Not reading {path}: lite mode reads only public data ({', '.join(p for p in self.allowed if p)}).")
+            return None
         if self.paused_until > time.monotonic() and not path.startswith("http"):
             return None  # our key is locked out: reading now would only extend the lockout
         headers = {}
@@ -1048,6 +1093,7 @@ class DailyStatus:
     """A short "still running" post at each of status_times() (IRL time). Its absence means trouble.
     Each post covers the time since the previous one (at most 24 h). Times missed while the bridge was down
     give one post when it's back, not one each."""
+    header = "BRIDGE STATUS"
 
     def __init__(self, ctx, webhook):
         self.ctx, self.webhook = ctx, webhook
@@ -1086,7 +1132,7 @@ class DailyStatus:
         self.ctx["state"].set("status_last_slot", slot.isoformat())
         text = self.text()
         self.ctx["state"].set("status_last_at", time.time())
-        self.ctx["discord"].post(self.webhook, "BRIDGE STATUS", [text])
+        self.ctx["discord"].post(self.webhook, self.header, [text])
 
     def text(self):
         up = time.time() - self.started
@@ -1816,6 +1862,9 @@ class DefenseWatcher(Watcher):
 
     def update(self, data, first):
         clock, our_id = self.ctx["clock"], self.ctx["company_id"]
+        # Our tugs out on a debris clear leave /industry until they're back: the theft check doesn't count them.
+        self.ctx["clearing_tugs"] = {t.get("id") for c in data.get("debrisClears", [])
+                                     if c.get("companyId") == our_id for t in c.get("tugs") or []}
         threats = {t["id"]: t for t in data.get("threats", []) if "id" in t}
         damage = data.get("hazardDamage", [])
         # hazardIncidents items: {id, hazardId, forecastDay, startDay, endDay, hits}. A flare
@@ -2337,6 +2386,11 @@ class IndustryWatcher(Watcher):
             elif first and low:
                 soon.append(f"{what} full in {hours_text(hours)}")
 
+        # Our tugs, freighters and crew pods (id -> "Crumb-3 (tug)"), for the theft check (NewsWatcher).
+        remember_ships(ctx, "vehicle_history", {
+            v["id"]: f"{v.get('name')} ({tidy_id(v.get('kind')).lower()})"
+            for v in (industry.get("industry") or {}).get("vehicles", [])
+            if "id" in v and v.get("kind") not in GROUND_VEHICLE_KINDS})
         # The diplomacy watcher checks offers that ask for our goods against these.
         ctx["stock"] = {(s.get("regionId"), s.get("goodId")): (s.get("qty") or 0, s.get("rate") or 0) for s in stocks}
 
@@ -2632,6 +2686,13 @@ class FleetsWatcher(Watcher):
     def update(self, data, first):
         clock, ctx = self.ctx["clock"], self.ctx
         ctx["fleet_places"] = {f.get("placeId") for f in data.get("fleets", [])}
+        # Our warships and other fleet ships by kind, parked or moving, for the theft check (NewsWatcher).
+        units = {}
+        for f in data.get("fleets", []) + data.get("fleetMoves", []):
+            for unit, n in (f.get("units") or {}).items():
+                if isinstance(n, (int, float)):
+                    units[unit] = units.get(unit, 0) + n
+        remember_ships(ctx, "ship_history", units)
         lines = []
         for list_name, label, ended in self.combat_lists:
             items = {item_key(i): i for i in data.get(list_name, [])}
@@ -3087,18 +3148,106 @@ class RecordsWatcher(Watcher):
         return lines
 
 
+# Vehicles that never leave Earth's surface: thieves take ships in orbit, so these aren't counted.
+GROUND_VEHICLE_KINDS = {"truck", "train", "plane", "coaster", "surface_train", "rover", "handysize", "barge"}
+
+
+def remember_ships(ctx, key, snapshot):
+    """Keep (game day, snapshot) in ctx[key] for SHIP_HISTORY_SECONDS, for the theft check."""
+    now = time.time()
+    ctx[key] = [h for h in ctx.get(key) or [] if h[1] >= now - SHIP_HISTORY_SECONDS] + \
+        [(ctx["clock"].now_game_day(), now, snapshot)]
+
+
+def snapshot_around(ctx, key, day, after):
+    """The latest snapshot taken before game day `day`, or the latest taken after it; None if there's none."""
+    history = [h for h in ctx.get(key) or [] if (h[0] > day if after else h[0] < day)]
+    return history[-1][2] if history else None
+
+
+def ships_missing(before, after, clearing=()):
+    """What's in `before` and not in `after`: fleet ships {kind: n} lose counts, vehicles {id: name} lose ids.
+    Returns a list of texts ("1 mining ship", "Crumb-3 (tug)")."""
+    gone = []
+    for key, value in before.items():
+        if isinstance(value, (int, float)):
+            n = value - after.get(key, 0)
+            if n > 0:
+                gone.append(f"{n:g} {tidy_id(key).lower()}" + ("s" if n > 1 else ""))
+        elif key not in after and key not in clearing:
+            gone.append(value)
+    return gone
+
+
+MARKET_EVENT_RE = re.compile(r" in (?P<region>[^.]+)\. (?P<good>.+?) (?:is short|floods the market) there")
+
+
+def market_event_note(ctx, text):
+    """' | we hold 1,234 there' when we have stock of the event's good in its region, else ''.
+    Text: "A strike at the mines in North Sea. Nickel–cobalt ore is short there and fetches 108% more for 37.6 days."
+    """
+    match = MARKET_EVENT_RE.search(text)
+    if not match:
+        return ""
+    goods = {name.lower(): gid for gid, name in (ctx.get("good_names") or {}).items()}
+    places = {name.lower(): pid for pid, name in (ctx.get("place_names") or {}).items()}
+    good, region = goods.get(match["good"].lower()), places.get(match["region"].lower())
+    qty = (ctx.get("stock") or {}).get((region, good), (0, 0))[0]
+    return f" | we hold {qty_text(qty)} there" if qty else ""
+
+
 class NewsWatcher(Watcher):
-    """Solar News items worth a post: another company salvaging one of our derelicts or one our salvage team is
-    heading for, and a faction buying
-    warships from Halcyon Arms Exchange. (Companies' purchases from the exchange aren't in the news.)
+    """Solar News items worth a post: every pirate raid (for now, to see how often they strike), a theft near
+    Earth that took ships of ours, another company salvaging one of our derelicts or one our salvage team is
+    heading for, and a faction buying warships from Halcyon Arms Exchange. (Companies' purchases from the
+    exchange aren't in the news.) Market events are only logged (MARKET_EVENT_POSTS).
 
     News items: {id, day, companyId, kind, text}.
     - kind "salvage": companyId is the salvager; the text names the craft and its old owner: "Company A
       salvaged the derelict Bateleur II-1, abandoned by Company B, for $1.21B."
     - kind "faction", companyId null: "Halcyon Arms Exchange sold 2 corvettes (Brightwater, Fair Trade) to the
       Morningstar Aerospace for $2.25B. They sail for Aquitania south pole 132°E."
+    - kind "raid", companyId null: "The Ashen Fleet shot down Some Company’s Some Craft-27.", "The Ashen Fleet
+      abandoned its base at …", and thefts: "A ship slipped its moorings around Earth and the Moon, and flew dark
+      toward the belt." (never whose: our ship totals from before and after it tell whether it was ours).
+    - kind "market_event", companyId null: "A strike at the mines in North Sea. Nickel–cobalt ore is short there and
+      fetches 108% more for 37.6 days." / "Overproduction at the works in Belo Horizonte. Steel floods the market…"
     The newest id seen is saved in state.json, so news from a restart is still posted."""
     path, interval, header = "/news", INTERVAL_NEWS, "SOLAR NEWS"
+
+    def __init__(self, ctx, webhook):
+        super().__init__(ctx, webhook)
+        self.theft: Optional[tuple] = None  # (news game day, the news text, real deadline) while being checked
+
+    def our_names(self):
+        """Our company's and craft's names, to spot ours in a raid story."""
+        ctx = self.ctx
+        names = {m.get("name") for m in (ctx.get("missions") or {}).values()}
+        vehicles = snapshot_around(ctx, "vehicle_history", float("inf"), after=False) or {}
+        names |= {v.rsplit(" (", 1)[0] for v in vehicles.values()}
+        return {n for n in names | {ctx.get("company_name")} if n and len(n) > 2}
+
+    def check_theft(self, theft):
+        """After a theft in the news: our ships from before it that aren't there after it. Posted once if any are
+        missing; logged and dropped when none are, or when the check runs out of time without snapshots."""
+        ctx = self.ctx
+        day, text, deadline = theft
+        pairs = [(snapshot_around(ctx, key, day, after=False), snapshot_around(ctx, key, day, after=True))
+                 for key in ("ship_history", "vehicle_history")]
+        if any(before is not None and after is None for before, after in pairs) and time.time() < deadline:
+            return []  # the watchers haven't read our ships since the theft yet
+        self.theft = None
+        if all(before is None for before, _ in pairs):
+            log(f"[Theft] Couldn't check \"{text}\": no snapshot of our ships from before it (just started?).")
+            return []
+        gone = [g for before, after in pairs if before is not None and after is not None
+                for g in ships_missing(before, after, ctx.get("clearing_tugs") or ())]
+        if not gone:
+            log(f"[Theft] None of our ships went missing with \"{text}\"")
+            return []
+        return [f"🚨 {ctx['clock'].stamp(game_day=day)} **Ships of ours may have been stolen:** since the news that "
+                f"\"{text.rstrip('.')}\", we're missing {', '.join(gone)}. Thieves take ships left at Earth or the Moon with "
+                f"no crew aboard and no orders; check the Fleet tab."]
 
     def update(self, data, first):
         ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
@@ -3123,10 +3272,99 @@ class NewsWatcher(Watcher):
                     lines.append(f"🏴‍☠️ {when} **A derelict our salvage team {team} was heading for was taken:** {text}")
                 elif kind == "faction" and text.startswith("Halcyon Arms Exchange sold"):
                     lines.append(f"🛒 {when} **Faction warship purchase:** {text}")
+                elif kind == "raid":
+                    ours_hit = any(re.search(re.escape(name) + r"(?![\w-])", text) for name in self.our_names())
+                    lines.append(f"🏴‍☠️ {when} " + ("**Pirates hit us:** " if ours_hit else "**Pirate activity:** ") + text)
+                    if THEFT_NEWS in text:
+                        self.theft = (n.get("day"), text, time.time() + THEFT_CHECK_SECONDS)
+                elif kind == "market_event":
+                    log(f"[Market event] {text}{market_event_note(ctx, text)}")
+                    if MARKET_EVENT_POSTS:
+                        lines.append(f"📈 {when} **Market event:** {text}{market_event_note(ctx, text)}")
         state.set("news_seen_id", newest)
+        if self.theft and isinstance(self.theft[0], (int, float)):
+            lines += self.check_theft(self.theft)
         if first and lines:  # news from while we were stopped: still worth posting, even after a --silent start
             ctx["discord"].post(self.webhook, self.header, lines)
             return []
+        return lines
+
+
+def segments_we_use(ctx):
+    """{segmentId: [our craft there]}: segments our craft are in or bound for, and the low orbit of each world where
+    our ships are stationed ("orbit/ganymede" -> "ganymede:low", per the glossary's Stationed in a segment)."""
+    used = {}
+    for m in (ctx.get("missions") or {}).values():
+        if m.get("segmentId") and m.get("status") in ("preparing", "transit", "active", "decaying"):
+            used.setdefault(m["segmentId"], []).append(m.get("name") or "a craft")
+    for place in ctx.get("fleet_places") or ():
+        if isinstance(place, str) and place.startswith("orbit/"):
+            used.setdefault(place[len("orbit/"):] + ":low", []).append("our ships")
+    return used
+
+
+def policy_text(s):
+    """'tax 10%, open' / 'tax 50%, permits $5.00B' for a segment's policy or its pending change."""
+    tax = f"tax {round((s.get('taxRate') or 0) * 100):g}%"
+    access = s.get("access")
+    if access == "permit":
+        price = s.get("permitPrice") or 0
+        return f"{tax}, permits " + (f"${price / 1000:,.2f}B" if price >= 1000 else f"${price:,.0f}M")
+    return f"{tax}, {access or 'open'}"
+
+
+class SegmentsWatcher(Watcher):
+    """Claimed segments (since 1.06.00): a holder's notice raising its tax or permit price, or closing entry, where
+    our craft or ships are; and a rival taking over one of our claims, or having taken it.
+
+    /segments: {segments, taxIncome, taxPaid}. segments items: {segmentId ("proteus:low"), companyId, claimedDay,
+    taxRate (0.5 = 50%), access ("open" or "permit"), permitPrice ($M), challengerId, challengeSince,
+    pending: null or {taxRate, access, permitPrice, fromDay}}. A holder must give 24 game days' notice of a rise
+    (about a real day); cuts apply at once, so a pending change is always a rise. The notices posted are saved in
+    state.json, so a restart doesn't repeat them."""
+    path, interval, header = "/segments", INTERVAL_SLOW, "SEGMENTS"
+
+    def __init__(self, ctx, webhook):
+        super().__init__(ctx, webhook)
+        self.claims = None  # our claims last poll: segmentId -> item
+
+    def update(self, data, first):
+        ctx, clock, me, state = self.ctx, self.ctx["clock"], self.ctx["company_id"], self.ctx["state"]
+        segments = {s["segmentId"]: s for s in data.get("segments") or [] if isinstance(s, dict) and s.get("segmentId")}
+        names = ctx.get("company_names") or {}
+        holder = lambda cid: names.get(cid, f"Company #{cid}") if cid else "nobody"
+        lines = []
+
+        seen = state.get("segment_notices")
+        notices = {f"{sid}@{s['pending'].get('fromDay')}": (sid, s) for sid, s in segments.items()
+                   if isinstance(s.get("pending"), dict) and s.get("companyId") != me}
+        if seen is not None:  # the first run ever only records the notices already given
+            used = segments_we_use(ctx)
+            for key, (sid, s) in notices.items():
+                if key in seen or sid not in used:
+                    continue
+                craft = used[sid]
+                there = ", ".join(f"**{c}**" if c != "our ships" else c for c in craft[:3]) + \
+                    (f" +{len(craft) - 3} more" if len(craft) > 3 else "")
+                lines.append(f"💸 {clock.stamp()} **{holder(s.get('companyId'))} is raising the cost of "
+                             f"{orbit_text(sid)}**, where we have {there}: {policy_text(s)} → "
+                             f"**{policy_text(s['pending'])}** from {clock.stamp(game_day=s['pending'].get('fromDay'))}")
+        state.set("segment_notices", sorted(notices))
+
+        mine = {sid: s for sid, s in segments.items() if s.get("companyId") == me}
+        old = self.claims if self.claims is not None else {}
+        for sid, s in mine.items():
+            challenger = s.get("challengerId")
+            if challenger and (first or old.get(sid, {}).get("challengerId") != challenger):
+                lines.append(f"⚔️ {clock.stamp()} **{holder(challenger)} is taking over our claim on {orbit_text(sid)}**: "
+                             f"their presence there beats ours (since {clock.stamp(game_day=s.get('challengeSince'))}). "
+                             f"Station warships there, or add craft, to hold it.")
+        if self.claims is not None:
+            for sid in self.claims.keys() - mine.keys():
+                taker = (segments.get(sid) or {}).get("companyId")
+                lines.append(f"🚩 {clock.stamp()} **We lost our claim on {orbit_text(sid)}**"
+                             + (f" to {holder(taker)}." if taker else ": it lapsed."))
+        self.claims = mine
         return lines
 
 
@@ -3473,6 +3711,305 @@ WATCHER_INTERVALS = {
 
 # ================= MAIN =================
 
+# ---- Lite mode (since 1.07.00): public news and global chat only ----
+
+def key_sections(api):
+    """The section ids our key may read (from the /api/v1 index, open to any key), or None if it couldn't be read."""
+    index = api.get("", use_etag=False)
+    if not index or not isinstance(index.get("sections"), list):
+        return None
+    return {s.get("id") for s in index["sections"] if isinstance(s, dict) and s.get("id")}
+
+
+def lite_key_ok(sections, state, post):
+    """Lite mode never runs on a key that can read company data: if this posted, a leaked lite key or a
+    channel open to anyone could show it. Says so once (state.json) and returns False until the key is fixed."""
+    extra = sorted((sections or set()) - LITE_SECTIONS)
+    told = state.get("lite_key_extra")
+    state.set("lite_key_extra", extra)
+    if not extra:
+        if told:
+            post("🔑 Sol-Watch Lite's API key now has only News and records and Public chat. Posting resumes.")
+        return True
+    if told != extra:
+        post("🔒 **Sol-Watch Lite is paused:** its API key can also read company data ("
+             + ", ".join(extra) + "). Lite mode posts to channels anyone may read, so it runs only from a key with "
+             "just **News and records** and **Public chat**. Untick the rest under Settings › Account › API keys "
+             "(the same key keeps working), or make a new key for lite mode. Nothing is posted until then.")
+    log(f"[Lite] Paused: the key can also read {', '.join(extra)}.")
+    return False
+
+
+def lite_tables(api, once):
+    """The reference tables lite mode names things from. Retried until they load, like load_startup_data."""
+    delay = 10
+    while True:
+        tables = {name: (api.get(f"/reference/{name}", use_etag=False) or {}).get(name)
+                  for name in ("techs", "places", "goods", "bodies")}
+        missing = [name for name, table in tables.items() if not table]
+        if not missing:
+            return tables
+        if once:
+            log(f"[Retry] Startup data didn't load ({', '.join(missing)}); giving up because of --once.")
+            sys.exit(1)
+        log(f"[Retry] Startup data didn't load ({', '.join(missing)}); trying again in {delay}s.")
+        nap(delay)
+        delay = min(delay * 2, STARTUP_RETRY_MAX_SECONDS)
+
+
+def lite_counts(ctx):
+    """What the digest adds up between posts, kept in state.json so a restart doesn't lose it."""
+    counts = ctx["state"].get("lite_counts") or {}
+    for key, empty in (("raids", 0), ("thefts", 0), ("posted", 0), ("noise", {}), ("founded", []), ("dark", [])):
+        counts.setdefault(key, empty)
+    return counts
+
+
+class LiteNewsWatcher(Watcher):
+    """Solar News for lite mode: the kinds in LITE_NEWS_ICONS are posted as they come (flare forecasts only, of the
+    hazard items), the kinds in LITE_NEWS_NOISE are only counted for the digest, and a kind in neither is new to
+    the bridge, so it's posted. The newest id seen is saved in state.json, so news from a restart is still posted."""
+    path, interval, header = "/news", INTERVAL_NEWS, "SOLAR NEWS"
+
+    def update(self, data, first):
+        ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
+        items = [n for n in (data if isinstance(data, list) else []) if isinstance(n, dict) and isinstance(n.get("id"), int)]
+        seen = state.get("news_seen_id")
+        newest = max([n["id"] for n in items] + [seen or 0])
+        lines, counts = [], lite_counts(ctx)
+        for n in sorted(items, key=lambda n: n["id"]):
+            if seen is None or n["id"] <= seen:  # the first run ever only records where the news is
+                continue
+            text, kind = n.get("text") or "", str(n.get("kind") or "")
+            if kind == "raid":
+                counts["raids"] += 1
+                counts["thefts"] += THEFT_NEWS in text
+            elif kind == "founded":
+                counts["founded"].append(text.split(" was founded")[0])
+            elif kind == "inactive":
+                counts["dark"].append(text.split(" went dark")[0])
+            if kind in LITE_NEWS_NOISE and not (kind == "hazard" and LITE_FORECAST_RE.search(text)):
+                counts["noise"][kind] = counts["noise"].get(kind, 0) + 1
+                continue
+            if kind not in LITE_NEWS_ICONS:
+                log(f"[Lite] News of a kind not seen before: {kind!r}: {text}")
+            counts["posted"] += 1
+            if kind in LITE_FIRST_SENTENCE_ONLY:
+                text = re.split(r"(?<=\.) ", text, maxsplit=1)[0]
+            icon = LITE_NEWS_ICONS.get(kind, "📰")
+            if kind == "range_expansion" and "opened a new launch pad" not in text:
+                icon = "🏗️"  # a pad still being built (materials asked for, halfway); 🚀 once it opens
+            lines.append(f"{icon} {clock.stamp(game_day=n.get('day'))} {text}")
+        state.set("news_seen_id", newest)
+        state.set("lite_counts", counts)
+        if first and lines:  # news from while we were stopped: still worth posting, even after a --silent start
+            ctx["discord"].post(self.webhook, self.header, lines)
+            return []
+        return lines
+
+
+class LiteCompaniesWatcher(Watcher):
+    """From /companies for lite mode: a company changing its name, a company newly marked a bully, and each
+    company's earnings a day for the digest's leaderboard. Names and marks are kept in state.json, so a change
+    made while the bridge was stopped is still posted; the first run ever only records them.
+
+    companies items: {id, name, status ("active"/"abandoned"), kind ("navy", "exchange", "pirate" or missing),
+    netPerDay ($M), formerNames, ...}. bullies items: {companyId, untilDay, victims}."""
+    path, interval, header = "/companies", INTERVAL_LITE_COMPANIES, "COMPANIES"
+
+    def update(self, data, first):
+        ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
+        companies = [c for c in data.get("companies") or [] if isinstance(c, dict) and "id" in c]
+        names = {str(c["id"]): c.get("name") for c in companies if c.get("name")}
+        ctx["company_names"] = {int(k): v for k, v in names.items()}
+        ctx["leaderboard"] = sorted(((c.get("netPerDay") or 0, c.get("name")) for c in companies
+                                     if c.get("status") == "active" and not c.get("kind")
+                                     and isinstance(c.get("netPerDay"), (int, float))), reverse=True)
+        lines = []
+        old = state.get("lite_names")
+        for cid, name in names.items():
+            if old and old.get(cid) and old[cid] != name:
+                lines.append(f"✏️ {clock.stamp()} **{old[cid]}** is now called **{name}**.")
+        state.set("lite_names", {**(old or {}), **names})
+
+        bullies = {f"{b.get('companyId')}@{b.get('untilDay')}": b for b in data.get("bullies") or [] if isinstance(b, dict)}
+        marked = state.get("lite_bullies")
+        if marked is not None:
+            for key, b in bullies.items():
+                if key in marked or any(k.split("@")[0] == str(b.get("companyId")) for k in marked):
+                    continue  # the mark of one already marked only moved its end: not news
+                victims = b.get("victims")
+                lines.append(f"⚠️ {clock.stamp()} **{names.get(str(b.get('companyId')), 'A company')}** is marked a "
+                             f"bully for attacking much smaller companies" + (f" ({victims} so far)" if victims else "")
+                             + f", until {clock.stamp(game_day=b.get('untilDay'))}. Companies it attacked are "
+                             "protected again until then.")
+        state.set("lite_bullies", sorted(bullies))
+        return lines
+
+
+class LiteRecordsWatcher(Watcher):
+    """From /records for lite mode: the first company to research a major technology, and duel records changing.
+    Kept in state.json; the first run ever only records them. (World firsts are counted from the news instead.)
+    techFirsts items: {techId, companyId, day}. duels items: {companyId, won, lost, drawn}."""
+    path, interval, header = "/records", INTERVAL_RECORDS, "RECORDS"
+
+    def update(self, data, first):
+        ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
+        names, techs = ctx.get("company_names") or {}, ctx.get("tech_names") or {}
+        lines = []
+        firsts = {t["techId"]: t for t in data.get("techFirsts") or [] if isinstance(t, dict) and t.get("techId")}
+        known = state.get("lite_tech_firsts")
+        if known is not None:
+            for tech_id, f in sorted(firsts.items(), key=lambda kv: kv[1].get("day") or 0):
+                if tech_id not in known:
+                    lines.append(f"🧪 {clock.stamp(game_day=f.get('day'))} **{names.get(f.get('companyId'), 'A company')}** "
+                                 f"is the first company to research **{techs.get(tech_id, tidy_id(tech_id))}**.")
+        state.set("lite_tech_firsts", sorted(firsts))
+
+        duels = {str(d["companyId"]): [d.get("won", 0), d.get("lost", 0), d.get("drawn", 0)]
+                 for d in data.get("duels") or [] if isinstance(d, dict) and d.get("companyId") is not None}
+        before = state.get("lite_duels")
+        if before is not None:
+            for cid, record in duels.items():
+                if before.get(cid) != record:
+                    won, lost, drawn = record
+                    lines.append(f"🤺 {clock.stamp()} Duel record of **{names.get(int(cid), f'Company #{cid}')}**: "
+                                 f"{won} won, {lost} lost, {drawn} drawn.")
+        state.set("lite_duels", duels)
+        return lines
+
+
+class MemorialWatcher(Watcher):
+    """The memorial wall (/memorial, every crew lost, newest first) for lite mode: each new entry, with the names.
+    Items: {id, companyId, companyName, kind, missionName, classified, ship, place, day, cause, lost, crew}."""
+    path, interval, header = "/memorial", INTERVAL_RECORDS, "MEMORIAL"
+
+    def update(self, data, first):
+        ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
+        items = [m for m in (data if isinstance(data, list) else []) if isinstance(m, dict) and isinstance(m.get("id"), int)]
+        seen = state.get("memorial_seen_id")
+        state.set("memorial_seen_id", max([m["id"] for m in items] + [seen or 0]))
+        if seen is None:
+            return []
+        lines = []
+        for m in sorted((m for m in items if m["id"] > seen), key=lambda m: m["id"]):
+            crew = ", ".join(str(c["name"]) for c in m.get("crew") or [] if isinstance(c, dict) and c.get("name"))
+            lost = m.get("lost") or 1
+            lines.append(f"🕯️ {clock.stamp(game_day=m.get('day'))} **{m.get('companyName')}** lost {lost} crew"
+                         + (f" ({crew})" if crew else "") + f": {m.get('cause') or 'cause unknown'}.")
+        if first and lines:
+            ctx["discord"].post(self.webhook, self.header, lines)
+            return []
+        return lines
+
+
+class LiteDigest(DailyStatus):
+    """Lite mode's post at each of status_times(): that it's running, and since the last one: the pirate tally,
+    new companies and those that went dark, the top 5 earners a day with their moves, and what the news had that
+    wasn't posted. The counts restart after each post."""
+    header = "SOL-WATCH LITE DIGEST"
+
+    def text(self):
+        ctx, state = self.ctx, self.ctx["state"]
+        up = time.time() - self.started
+        uptime = f"{up / 86400:.1f} days" if up >= 86400 else f"{up / 3600:.0f}h"
+        span = min(time.time() - (state.get("status_last_at") or 0), 86400)
+        counts = lite_counts(ctx)
+        before = state.get("lite_digest_raids")
+        raids = f"{counts['raids']} raid{'s' if counts['raids'] != 1 else ''}" + \
+            (f" ({counts['thefts']} of them {'a theft' if counts['thefts'] == 1 else 'thefts'} near Earth)"
+             if counts["thefts"] else "") + \
+            (f", {before} in the digest before" if before is not None else "")
+        rows = [f"🟢 **[SOL-WATCH LITE]** v{VERSION} running for {uptime} | {counts['posted']} news item{'s' if counts['posted'] != 1 else ''} posted "
+                f"in the last {span / 3600:.0f}h", f"🏴‍☠️ Pirates: {raids}"]
+        if counts["founded"]:
+            rows.append("🆕 New companies: " + ", ".join(f"**{n}**" for n in counts["founded"]))
+        if counts["dark"]:
+            rows.append("🌑 Went dark: " + ", ".join(counts["dark"]))
+        board = (ctx.get("leaderboard") or [])[:5]
+        if board:
+            ranks = state.get("lite_ranks") or {}
+            cells = []
+            for rank, (net, name) in enumerate(board, 1):
+                was = ranks.get(name)
+                move = "" if was is None or was == rank else (f" ▲{was - rank}" if was > rank else f" ▼{rank - was}")
+                per_day = f"${net / 1000:,.2f}B" if net >= 1000 else f"${net:,.0f}M"
+                cells.append(f"{rank}. **{name}** {per_day}/day{move}")
+            rows.append("💰 Top earners: " + " · ".join(cells))
+            state.set("lite_ranks", {name: rank for rank, (_, name) in enumerate(ctx.get("leaderboard") or [], 1)})
+        noise = counts["noise"]
+        if noise:
+            rows.append("📰 Also in the news, not posted: " + ", ".join(
+                f"{n} {LITE_NEWS_NOISE.get(kind, (kind, kind))[n != 1]}" for kind, n in sorted(noise.items(), key=lambda kv: -kv[1])))
+        state.set("lite_digest_raids", counts["raids"])
+        state.set("lite_counts", {})
+        return "\n".join(rows)
+
+
+def run_lite(config, api, state, clock, discord, broadcast_startup, sections, once):
+    """The bridge in lite mode: public news, records, the memorial and global chat, all to one channel."""
+    webhook = config["lite"]
+    api.allowed = LITE_PATHS
+    api.on_alert = lambda text: discord.post(webhook, "API KEY", [text])
+    why = "set in settings.ini" if BRIDGE_MODE == "lite" else "the API key can't read Company"
+    log(f"[Startup] Lite mode ({why}): public news and global chat only, to one channel. Reads only "
+        + ", ".join(p for p in LITE_PATHS if p) + ".")
+    while not lite_key_ok(sections, state, api.on_alert):
+        state.save()
+        if once:
+            return
+        for _ in range(60):  # check the key again every 10 minutes
+            heartbeat()
+            discord.flush()
+            time.sleep(10)
+        sections = key_sections(api)
+    if not state.get("lite_announced"):
+        state.set("lite_announced", True)
+        discord.post(webhook, "SOL-WATCH LITE", [
+            f"🛰️ **Sol-Watch Lite v{VERSION} is set up** ({why}). This channel gets public game news, the memorial, "
+            "firsts, duel records, name changes, bully marks and global chat, plus a digest at the status times. "
+            "Nothing about any company that isn't public in the game. Its key needs only **News and records** and "
+            "**Public chat**."])
+    tables = lite_tables(api, once)
+    ctx = {
+        "api": api, "clock": clock, "discord": discord, "broadcast_startup": broadcast_startup, "state": state,
+        "write_files": not once, "company_id": None, "company_name": None, "lite": True,
+        "webhooks": {"general": webhook, "alliance": webhook},
+        "company_names": load_company_names(api),
+        "tech_names": {t["id"]: t.get("name", t["id"]) for t in tables["techs"]},
+        "place_names": {p["id"]: p.get("name", p["id"]) for p in tables["places"]},
+        "body_names": {b["id"]: b.get("name", b["id"]) for b in tables["bodies"]},
+        "good_names": {g["id"]: g.get("name", g["id"]) for g in tables["goods"]},
+        "captured": set(),
+    }
+    watchers = [LiteCompaniesWatcher(ctx, webhook), LiteNewsWatcher(ctx, webhook), LiteRecordsWatcher(ctx, webhook),
+                MemorialWatcher(ctx, webhook), ChatWatcher(ctx)]
+    if UPDATE_CHECK:
+        watchers.append(BridgeUpdateWatcher(ctx, webhook))
+    for watcher in watchers:
+        watcher.safe_poll(" at startup")
+        watcher.next_due = time.monotonic() + watcher.interval
+    digest = LiteDigest(ctx, webhook)
+    state.save()
+    log(f"Sol-Watch Lite v{VERSION} is online.\n")
+    sd_notify(f"READY=1\nSTATUS=Online (lite), v{VERSION}")
+    if once:
+        log("[--once] Single poll finished.")
+        return
+    while True:
+        heartbeat()
+        clock.refresh()
+        discord.flush()
+        now = time.monotonic()
+        for watcher in watchers:
+            if now >= watcher.next_due:
+                watcher.next_due = now + watcher.interval
+                watcher.safe_poll()
+        digest.check()
+        state.save()
+        time.sleep(1)
+
+
 def ask_broadcast():
     if "--broadcast" in sys.argv:
         return True
@@ -3506,6 +4043,12 @@ def acquire_lock():
     handle.flush()
     global _lock_handle
     _lock_handle = handle  # kept open: the lock lasts as long as the process
+
+
+def require_webhooks(config, names):
+    missing = [f"WEBHOOK_{name.upper()}" for name in names if not config.get(name)]
+    if missing:
+        sys.exit(f"Missing settings: {', '.join(missing)}. Put them in {HERE / '.env'} (see .env.example).")
 
 
 def check_key_sections(api, state, post):
@@ -3592,6 +4135,11 @@ def main():
     clock = GameClock(api, config["irl_tz"])
     clock.refresh(force=True)
 
+    sections = key_sections(api)
+    if BRIDGE_MODE == "lite" or (BRIDGE_MODE is None and sections is not None and "company" not in sections):
+        require_webhooks(config, ("lite",))
+        return run_lite(config, api, state, clock, discord, broadcast_startup, sections, once)
+    require_webhooks(config, ("corp", "general", "alliance"))
     # Before the startup data: without the Company section /me never loads, and this says why.
     check_key_sections(api, state, api.on_alert)
     me, tables = load_startup_data(api, once)
@@ -3653,6 +4201,7 @@ def main():
         RecordsWatcher(ctx, config["corp"]),
         DiscoveriesWatcher(ctx, config["alliance"]),
         NewsWatcher(ctx, config["corp"]),
+        SegmentsWatcher(ctx, config["corp"]),
         PadGoalWatcher(ctx, config["general"]),
         PlaceWatcher(ctx, config["general"]),
         ApiSpecWatcher(ctx, config["corp"]),

@@ -4,6 +4,27 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.00 (Nov 8, 2026)
+
+- **Lite mode.** The bridge can now post only public game information, the same for every player, to one channel (`WEBHOOK_LITE`), for a server anyone may read. See "Lite mode" in the README.
+- **What it posts:**
+  - **News:** chosen Solar News, including pirate raids, flare forecasts, new and vanished companies, launch failures and surrendered outposts. Busy kinds such as contracts and price moves are only counted. A launch failure stops at "failed during ascent.", leaving out what it carried, and a launch pad still being built gets 🏗️ (🚀 once it opens).
+  - **Records:** the memorial with crew names, tech firsts and duel records.
+  - **Companies:** name changes and bully marks.
+  - **Chat:** global chat.
+  - **Digest:** at the status times, a summary with a pirate tally and the top five earners.
+- **It needs a key with only News and records and Public chat.** The bridge switches to lite mode by itself when its key can't read Company (or with `mode = lite` in `settings.ini`). It pauses on a key that can read anything more, and refuses any read beyond the public endpoints, so company data can't reach a public channel by mistake.
+- **The full bridge is unchanged.** Its webhooks are now checked after the key, so a lite install needs only `WEBHOOK_LITE`.
+
+## 1.06.00 (Nov 8, 2026)
+
+- **Pirate raids.** Every pirate raid in Solar News is now posted to the Corp channel (🏴‍☠️), for example "The Ashen Fleet shot down Some Company's Some Craft-11". This is for now, to show how often the pirates strike. One that names our company or one of our craft is headed "Pirates hit us".
+- **Thefts near Earth.** Thieves take ships left at Earth or the Moon with no crew aboard and no orders. The news says only "A ship slipped its moorings around Earth and the Moon", never whose. After one, the bridge compares our ships from just before it with the next reading after it, and posts 🚨 with any that are missing. Tugs out on a debris clear aren't counted.
+- **Tax and permit rises where we are.** When a segment's holder gives notice that it's raising its tax or permit price, the bridge posts it once (💸) if our craft are in or bound for that segment, or our ships are stationed there. The post names the holder, our craft there, the old and new terms, and when the rise starts.
+- **Our claims.** A rival starting to take over one of our segments is posted (⚔️), and so is a claim we lose (🚩).
+- **Needs the Segments section.** Tick **Segments** on the bridge's API key (Settings › Account › API keys). Until then, the bridge says once that it's missing, and everything else carries on.
+- **Market events are logged.** Shortages and gluts in one region now go to `bridge.log` with how much of the good we hold there. They aren't posted (`MARKET_EVENT_POSTS` turns that on).
+
 ## 1.05.02 (Nov 8, 2026)
 
 - **Research hand-over, fixed:** when research finished with more in the queue, the bridge could say the lab was idle, because the game can take a few minutes to start the next item (about 3 on Nov 7). Now it posts only "finished" and waits. If nothing has started 10 minutes later, it warns that the lab is idle, naming what's next in the queue and the game's reason for holding it. With an empty queue it still warns at once.
