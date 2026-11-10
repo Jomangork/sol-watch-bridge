@@ -4,6 +4,11 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.04 (Nov 10, 2026)
+
+- **Earth's ballot closing.** Both modes now warn 24, 12 and 1 real hours before the yearly ballot's voting closes (🗳️), with what's on the ballot. The full bridge adds our vote, or "⚠️ We haven't voted yet". Lite mode can't read the ballot, so it works the close out from the game's schedule (1 January, then 120 game days of nominations and 168 of voting). The hours are `ballot_warnings_hours` in `settings.ini`.
+- **Walkout end time, fixed:** a walkout "until 2032-09-21" now ends at the start of that date, not 12 hours into it.
+
 ## 1.07.03 (Nov 10, 2026)
 
 - **Clear Sky walkouts at our outposts.** When crews at one of our outposts walk off the job in support of Clear Sky, the bridge now posts it to the Corp channel (✊), with when output resumes and every operation that stops there. Any other Clear Sky news naming us is posted too.

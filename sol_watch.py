@@ -82,7 +82,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.03"
+VERSION = "1.07.04"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -151,6 +151,10 @@ UPDATE_NOTICE_MIN_GAP_SECONDS = 3600
 # Warn when something will run out or fill up within these many real hours.
 # (1 game day = 1 real hour, so these match the game's own supply warnings.)
 COUNTDOWN_WARNINGS_HOURS = (72, 48, 24, 12, 4, 1)
+BALLOT_WARNINGS_HOURS = (24, 12, 1)  # real hours before Earth's ballot closes, in both modes
+# Earth's ballot (glossary "Ballot"): opens each game year on 1 January, nominations for 120 game days, then
+# voting for 168. Lite mode can't read /factions, so it works the close out from these.
+BALLOT_NOMINATION_DAYS, BALLOT_VOTING_DAYS = 120, 168
 # A stock's warnings are given again only after a refill: at least this many times the amount it had
 # when last warned. A stock made and used at the same rate wobbles, and would otherwise be warned again and again.
 COUNTDOWN_REFILL_FACTOR = 1.25
@@ -272,6 +276,7 @@ LITE_NEWS_NOISE = {  # kind: (one, several)
     "crew_lost": ("crew-lost item (posted from the memorial)", "crew-lost items (posted from the memorial)")}
 # Kinds cut to their first sentence: the rest (what a failed launch carried) is detail to look up in the game.
 LITE_FIRST_SENTENCE_ONLY = {"launch_failure"}
+LITE_BALLOT_OPEN_RE = re.compile(r"Earth[’']s ballot is open: (?P<options>.+)")
 LITE_FORECAST_RE = re.compile(r"Space Weather Office|forecasts? a solar flare", re.IGNORECASE)
 
 # The read limit is 60/min per key (burst 30); spacing every request keeps us
@@ -558,6 +563,7 @@ SETTINGS_SPEC = (
     ("contracts", "alliance_job_min_level", "ALLIANCE_JOB_MIN_LEVEL", "choice", ("easy", "medium", "hard")),
     ("contracts", "alliance_job_digest_at", "ALLIANCE_JOB_DIGEST_AT", "int", (2, 100)),
     ("alerts", "countdown_warnings_hours", "COUNTDOWN_WARNINGS_HOURS", "hours", None),
+    ("alerts", "ballot_warnings_hours", "BALLOT_WARNINGS_HOURS", "hours", None),
     ("alerts", "research_warning_minutes", "RESEARCH_WARNING_SECONDS", "minutes", (1, 120)),
     ("alerts", "deal_expiry_warning_minutes", "DEAL_EXPIRY_WARNING_MINUTES", "int", (1, 1440)),
     ("alerts", "stall_repeat_hours", "STALL_REPEAT_HOURS", "float", (0, 168)),
@@ -2012,8 +2018,8 @@ class Countdown:
     repeat one already given; something seen for the first time is only recorded.
     """
 
-    def __init__(self, state=None, name=None):
-        self.state, self.name = state, name
+    def __init__(self, state=None, name=None, marks=None):
+        self.state, self.name, self.marks = state, name, marks
         saved = state.get(name, {}) if state is not None and name else {}
         self.levels = dict(saved)  # "|"-joined key -> lowest mark reached (None: above them all)
         # key -> the amount when its level was last set. With an amount given, a level only goes back
@@ -2026,7 +2032,7 @@ class Countdown:
         return "|".join(str(part) for part in key) if isinstance(key, tuple) else str(key)
 
     def check(self, key, hours, first, amount=None):
-        crossed = [h for h in COUNTDOWN_WARNINGS_HOURS if hours is not None and hours <= h]
+        crossed = [h for h in (self.marks or COUNTDOWN_WARNINGS_HOURS) if hours is not None and hours <= h]
         level = min(crossed) if crossed else None
         key = self._key(key)
         known, old = key in self.levels, self.levels.get(key)
@@ -2103,6 +2109,18 @@ def body_name(ctx, body_id):
     if body_id is None:
         return "an unknown place"
     return (ctx.get("body_names") or {}).get(body_id) or (ctx.get("place_names") or {}).get(body_id) or tidy_id(body_id)
+
+
+def game_day_of_date(text):
+    """The game day a calendar date ('2032-09-21') starts on: game days count from noon, 1 Jan 2000."""
+    return (datetime.strptime(text, "%Y-%m-%d") - datetime(2000, 1, 1)).days - 0.5
+
+
+def ballot_closing_text(clock, closes_day, mark, ballot_line="", vote_line=""):
+    """'🗳️ Earth's ballot closes in 24h' with when, what's on it and, in full mode, our vote."""
+    rows = [f"Closes: {clock.stamp(game_day=closes_day)}"] + [r for r in (ballot_line, vote_line) if r]
+    return f"🗳️ {clock.stamp()} **Earth's ballot closes in {mark}h** ({mark}h warning)\n" + \
+        "\n".join(f"• {r}" for r in rows)
 
 
 def stall_text(stamp, place, reasons, state="stopped", note=None):
@@ -2730,6 +2748,7 @@ class FactionsWatcher(Watcher):
     def __init__(self, ctx, webhook):
         super().__init__(ctx, webhook)
         self.reported, self.watch_hits = {}, set()
+        self.ballot_countdown = Countdown(ctx["state"], "ballot_countdown", BALLOT_WARNINGS_HOURS)
         # Ships bought from the exchange so far, saved so a purchase made during a restart is still posted.
         self.listings, self.bought = {}, ctx["state"].get("broker_bought")
 
@@ -2829,6 +2848,21 @@ class FactionsWatcher(Watcher):
             lines.append(f"🏛️ {clock.stamp()} **Earth's policies in force:** {shown or 'none'}")
         return lines
 
+    def ballot_closing(self, ballot, mine, first):
+        """A warning at each BALLOT_WARNINGS_HOURS mark before the ballot's voting closes, with our vote."""
+        clock = self.ctx["clock"]
+        closes = ballot.get("closesDay")
+        if ballot.get("phase") != "voting" or ballot.get("result") is not None or not isinstance(closes, (int, float)):
+            return []
+        mark = self.ballot_countdown.check(("ballot", ballot.get("year"), closes), clock.hours_until(closes), first)
+        if not mark:
+            return []
+        options = [o.get("id") if isinstance(o, dict) else o for o in ballot.get("options") or []]
+        on = "On the ballot: " + ", ".join(f"**{policy_name(o)}**" for o in options) if options else ""
+        vote = mine.get("vote")
+        ours = f"Our vote: {policy_name(vote)}" if vote else ("⚠️ We haven't voted yet." if mine.get("canVote") else "")
+        return [ballot_closing_text(clock, closes, mark, on, ours)]
+
     def update(self, data, first):
         clock = self.ctx["clock"]
         standing = data.get("standing") or {}
@@ -2895,6 +2929,7 @@ class FactionsWatcher(Watcher):
 
         lines += self.government_changes(data.get("government") or {})
         ballot = self.ballot_changes(data.get("ballot") or {}, data.get("ballotMine") or {}, data.get("government") or {})
+        ballot += self.ballot_closing(data.get("ballot") or {}, data.get("ballotMine") or {}, first)
         if first and ballot and not self.ctx["broadcast_startup"]:
             self.ctx["discord"].post(self.webhook, self.header, ballot)  # news even on a --silent start
         else:
@@ -3272,7 +3307,7 @@ class NewsWatcher(Watcher):
         walkout = WALKOUT_RE.search(text)
         if not walkout:
             return f"✊ {when} **Clear Sky acted against us:** {text}"
-        until = (datetime.strptime(walkout["until"], "%Y-%m-%d") - datetime(2000, 1, 1)).days
+        until = game_day_of_date(walkout["until"])
         place = walkout["place"]
         place_id = next((pid for pid in ctx.get("sites_by_place") or {} if place_name(ctx, pid) == place), None)
         sites = (ctx.get("sites_by_place") or {}).get(place_id) or []
@@ -3829,6 +3864,8 @@ class LiteNewsWatcher(Watcher):
             if kind not in LITE_NEWS_ICONS:
                 log(f"[Lite] News of a kind not seen before: {kind!r}: {text}")
             counts["posted"] += 1
+            if kind == "politics" and (opened := LITE_BALLOT_OPEN_RE.match(text)):
+                state.set("lite_ballot", {"day": n.get("day"), "options": opened["options"].rstrip(".")})
             if kind in LITE_FIRST_SENTENCE_ONLY:
                 text = re.split(r"(?<=\.) ", text, maxsplit=1)[0]
             icon = LITE_NEWS_ICONS.get(kind, "📰")
@@ -3841,6 +3878,39 @@ class LiteNewsWatcher(Watcher):
             ctx["discord"].post(self.webhook, self.header, lines)
             return []
         return lines
+
+
+class LiteBallotWatcher(Watcher):
+    """Earth's ballot closing, warned at each BALLOT_WARNINGS_HOURS mark. A lite key can't read /factions, so the
+    close comes from the game's yearly schedule (BALLOT_NOMINATION_DAYS, BALLOT_VOTING_DAYS) and the game clock,
+    and what's on the ballot from the news of its opening, when the bridge saw it."""
+    interval, header = INTERVAL_SLOW, "EARTH'S BALLOT"
+
+    def __init__(self, ctx, webhook):
+        super().__init__(ctx, webhook)
+        self.countdown = Countdown(ctx["state"], "ballot_countdown", BALLOT_WARNINGS_HOURS)
+
+    def poll(self):
+        first = not self.seeded
+        lines = self.update(None, first)
+        self.seeded = True
+        self.publish(self.webhook, self.header, lines, first)
+
+    def update(self, data, first):
+        ctx, clock = self.ctx, self.ctx["clock"]
+        now = clock.now_game_day()
+        year = (J2000_EPOCH + timedelta(days=now)).year
+        opens = game_day_of_date(f"{year}-01-01")
+        voting, closes = opens + BALLOT_NOMINATION_DAYS, opens + BALLOT_NOMINATION_DAYS + BALLOT_VOTING_DAYS
+        if not voting <= now < closes:
+            return []
+        mark = self.countdown.check(("ballot", year, closes), clock.hours_until(closes), first)
+        if not mark:
+            return []
+        seen = ctx["state"].get("lite_ballot") or {}
+        on = f"On the ballot: {seen['options']}" if seen.get("options") and (seen.get("day") or 0) >= voting else ""
+        return [ballot_closing_text(clock, closes, mark, on,
+                                    "Every company at least 14 real days old has one vote (Empire › Politics › Ballot).")]
 
 
 class LiteCompaniesWatcher(Watcher):
@@ -4018,7 +4088,7 @@ def run_lite(config, api, state, clock, discord, broadcast_startup, sections, on
         "captured": set(),
     }
     watchers = [LiteCompaniesWatcher(ctx, webhook), LiteNewsWatcher(ctx, webhook), LiteRecordsWatcher(ctx, webhook),
-                MemorialWatcher(ctx, webhook), ChatWatcher(ctx)]
+                MemorialWatcher(ctx, webhook), LiteBallotWatcher(ctx, webhook), ChatWatcher(ctx)]
     if UPDATE_CHECK:
         watchers.append(BridgeUpdateWatcher(ctx, webhook))
     for watcher in watchers:
