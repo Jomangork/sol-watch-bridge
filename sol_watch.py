@@ -82,7 +82,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.02"
+VERSION = "1.07.03"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -241,6 +241,9 @@ RESEARCH_START_GRACE_SECONDS = 600
 THEFT_CHECK_SECONDS = 1800
 SHIP_HISTORY_SECONDS = 7200
 THEFT_NEWS = "slipped its moorings"
+# "Crews at <company>’s <place> outpost walked off the job in support of Clear Sky. Its output stops until 2032-09-21."
+WALKOUT_RE = re.compile(r"Crews at (?P<company>.+?)[’']s (?P<place>.+?) outpost walked off the job.*?"
+                        r"until (?P<until>\d{4}-\d{2}-\d{2})", re.S)
 # Market events (shortages and gluts in one region, from the news) are only logged for now, as a test; True posts them.
 MARKET_EVENT_POSTS = False
 
@@ -2199,8 +2202,6 @@ class CompanyWatcher(Watcher):
         # Facility bills (kind "facility") are skipped: the level rise above already announces those.
         upgrades = {(b.get("kind"), b.get("ref"), b.get("what")): b for b in data.get("workBills") or []
                     if b.get("upgrade") and b.get("kind") != "facility"}
-        # Sites being upgraded (site id -> bill): the game reports them as short of staff (IndustryWatcher).
-        ctx["upgrading_sites"] = {str(b.get("ref")): b for (kind, _, _), b in upgrades.items() if kind == "site"}
         if not first:
             for key, bill in self.upgrades.items():
                 ready = bill.get("readyDay")
@@ -2427,6 +2428,10 @@ class IndustryWatcher(Watcher):
         # The game names one reason per site, so a stall blamed on crew can hide missing upkeep goods: off Earth,
         # an upkeep good counts as missing where the place has none of it, or a site there names it as its limit.
         stalls, stopped = {}, {}  # stopped: (place name, "stopped"/"slowed") -> {reason text: ["factory (Steel)", ...]}
+        ctx["sites_by_place"] = {}  # placeId -> ["mine (Helium-3)", ...], for a walkout's post (NewsWatcher)
+        for site in flows.get("sites", []):
+            ctx["sites_by_place"].setdefault(site.get("placeId"), []).append(
+                f"{site.get('kind')} ({good_name(ctx, site.get('goodId'))})")
         notes = {}  # place_state -> the upkeep stock line, for places stopped by missing upkeep goods
         crew = ctx.get("crew_by_place") or {}
         kinds, stock = ctx.get("place_kinds") or {}, ctx.get("stock") or {}
@@ -2456,12 +2461,12 @@ class IndustryWatcher(Watcher):
             recently = time.monotonic() - self.stall_announced.get(announce_key, -1e9) < STALL_REPEAT_HOURS * 3600
             if seen == 2 and not recently:
                 self.stall_announced[announce_key] = time.monotonic()
-                upgrade = (ctx.get("upgrading_sites") or {}).get(str(site_id))
-                if held == "staffing" and upgrade:
-                    # The game reports a site under upgrade as short of staff, even a crewless mine (Mare Humorum's
-                    # helium-3 mine, level 9 to 10, Nov 9): not posted, since "Upgrade complete" follows.
-                    log(f"[Stall] {site.get('kind')} ({site.get('goodId')}) at {site.get('placeId')} {state} "
-                        f"while being upgraded ({upgrade.get('what')}, ready day {upgrade.get('readyDay')}): not posted")
+                walkout = (ctx.get("walkouts") or {}).get(site.get("placeId"))
+                if held == "staffing" and walkout and clock.now_game_day() < walkout:
+                    # A Clear Sky walkout stops every site there and reads as "staffing", even at a crewless mine.
+                    # The walkout post (NewsWatcher) already listed them, with when work resumes.
+                    log(f"[Stall] {site.get('kind')} ({site.get('goodId')}) at {site.get('placeId')} {state}: "
+                        f"crews walked out for Clear Sky until day {walkout}; not posted")
                     continue
                 limiting = good_name(ctx, site.get("limitingGood")) if site.get("limitingGood") else "goods"
                 if held == "staffing" and site.get("placeId") in (ctx.get("damaged_outposts") or {}):
@@ -3221,6 +3226,8 @@ class NewsWatcher(Watcher):
       toward the belt." (never whose: our ship totals from before and after it tell whether it was ours).
     - kind "market_event", companyId null: "A strike at the mines in North Sea. Nickel–cobalt ore is short there and
       fetches 108% more for 37.6 days." / "Overproduction at the works in Belo Horizonte. Steel floods the market…"
+    - kind "clear_sky", companyId null: "Crews at Some Company’s Mare Humorum outpost walked off the job in support of
+      Clear Sky. Its output stops until 2032-09-21." One naming us is posted, a walkout with what stops there.
     The newest id seen is saved in state.json, so news from a restart is still posted."""
     path, interval, header = "/news", INTERVAL_NEWS, "SOLAR NEWS"
 
@@ -3258,6 +3265,23 @@ class NewsWatcher(Watcher):
                 f"\"{text.rstrip('.')}\", we're missing {', '.join(gone)}. Thieves take ships left at Earth or the Moon with "
                 f"no crew aboard and no orders; check the Fleet tab."]
 
+    def clear_sky_text(self, when, text):
+        """A Clear Sky action naming us. A walkout stops all output at one of our outposts: the post lists what stops
+        there and when it resumes, and the industry watcher stops blaming those sites' stall on crew."""
+        ctx = self.ctx
+        walkout = WALKOUT_RE.search(text)
+        if not walkout:
+            return f"✊ {when} **Clear Sky acted against us:** {text}"
+        until = (datetime.strptime(walkout["until"], "%Y-%m-%d") - datetime(2000, 1, 1)).days
+        place = walkout["place"]
+        place_id = next((pid for pid in ctx.get("sites_by_place") or {} if place_name(ctx, pid) == place), None)
+        sites = (ctx.get("sites_by_place") or {}).get(place_id) or []
+        if place_id:
+            ctx.setdefault("walkouts", {})[place_id] = until
+        stops = f" | Stops: {', '.join(sites)}" if sites else ""
+        return (f"✊ {when} **Clear Sky walkout at our {place} outpost:** all output there stops until "
+                f"{ctx['clock'].stamp(game_day=until)}{stops}")
+
     def update(self, data, first):
         ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
         items = [n for n in (data if isinstance(data, list) else data.get("news") or [])
@@ -3286,6 +3310,8 @@ class NewsWatcher(Watcher):
                     lines.append(f"🏴‍☠️ {when} " + ("**Pirates hit us:** " if ours_hit else "**Pirate activity:** ") + text)
                     if THEFT_NEWS in text:
                         self.theft = (n.get("day"), text, time.time() + THEFT_CHECK_SECONDS)
+                elif kind == "clear_sky" and ours and re.search(re.escape(ours) + r"[’']s\b", text):
+                    lines.append(self.clear_sky_text(when, text))
                 elif kind == "market_event":
                     log(f"[Market event] {text}{market_event_note(ctx, text)}")
                     if MARKET_EVENT_POSTS:

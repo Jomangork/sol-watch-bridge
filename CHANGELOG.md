@@ -4,6 +4,12 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.03 (Nov 10, 2026)
+
+- **Clear Sky walkouts at our outposts.** When crews at one of our outposts walk off the job in support of Clear Sky, the bridge now posts it to the Corp channel (✊), with when output resumes and every operation that stops there. Any other Clear Sky news naming us is posted too.
+- **The stall that follows isn't blamed on crew.** A walkout makes the game report every site there as short of crew, even mines, which need none. While it lasts, those stalls aren't posted again; the walkout post already lists them.
+- **1.07.02's upgrade rule is undone.** The Mare Humorum stall it was written for came from a walkout, not the mine's upgrade. A site under upgrade only runs slower, so crew stalls there are posted as before.
+
 ## 1.07.02 (Nov 10, 2026)
 
 - **No false crew stalls during an upgrade.** While a site is being upgraded, the game reports it as short of crew, even a mine, which needs none. The bridge no longer posts "stopped: not enough crew" for a site under upgrade; it logs it, and "Upgrade complete" follows as before. A site under upgrade that runs out of an input is still posted.
