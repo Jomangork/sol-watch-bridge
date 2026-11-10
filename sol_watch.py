@@ -82,7 +82,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.00"
+VERSION = "1.07.02"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -258,7 +258,7 @@ LITE_NEWS_ICONS = {
     "strike": "💣", "clear_sky": "✊", "founded": "🆕", "inactive": "🌑", "alliance": "🤝", "colony": "🏘️",
     "station": "🛰️", "outpost": "📍", "range_expansion": "🚀", "ueg_built": "🏗️", "ueg_navy": "⚓",
     "ueg_elevator": "🏛️", "badge_first": "🏅", "project_honor": "🏆", "market_event": "📈", "salvage": "♻️",
-    "abandoned": "🛸", "launch_failure": "💥", "outpost_surrendered": "🏳️"}
+    "abandoned": "🛸", "launch_failure": "💥", "outpost_surrendered": "🏳️", "return": "🔙", "terrorist_hunt": "⚔️"}
 # Kinds only counted in the digest: frequent, or posted from elsewhere (crew lost comes from the memorial).
 # Hazard items that hit one craft count here too; flare forecasts are posted.
 LITE_NEWS_NOISE = {  # kind: (one, several)
@@ -2199,6 +2199,8 @@ class CompanyWatcher(Watcher):
         # Facility bills (kind "facility") are skipped: the level rise above already announces those.
         upgrades = {(b.get("kind"), b.get("ref"), b.get("what")): b for b in data.get("workBills") or []
                     if b.get("upgrade") and b.get("kind") != "facility"}
+        # Sites being upgraded (site id -> bill): the game reports them as short of staff (IndustryWatcher).
+        ctx["upgrading_sites"] = {str(b.get("ref")): b for (kind, _, _), b in upgrades.items() if kind == "site"}
         if not first:
             for key, bill in self.upgrades.items():
                 ready = bill.get("readyDay")
@@ -2454,6 +2456,13 @@ class IndustryWatcher(Watcher):
             recently = time.monotonic() - self.stall_announced.get(announce_key, -1e9) < STALL_REPEAT_HOURS * 3600
             if seen == 2 and not recently:
                 self.stall_announced[announce_key] = time.monotonic()
+                upgrade = (ctx.get("upgrading_sites") or {}).get(str(site_id))
+                if held == "staffing" and upgrade:
+                    # The game reports a site under upgrade as short of staff, even a crewless mine (Mare Humorum's
+                    # helium-3 mine, level 9 to 10, Nov 9): not posted, since "Upgrade complete" follows.
+                    log(f"[Stall] {site.get('kind')} ({site.get('goodId')}) at {site.get('placeId')} {state} "
+                        f"while being upgraded ({upgrade.get('what')}, ready day {upgrade.get('readyDay')}): not posted")
+                    continue
                 limiting = good_name(ctx, site.get("limitingGood")) if site.get("limitingGood") else "goods"
                 if held == "staffing" and site.get("placeId") in (ctx.get("damaged_outposts") or {}):
                     # The game reports a hazard-hit outpost's sites as short of staff, even crewless mines.

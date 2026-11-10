@@ -4,6 +4,14 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.02 (Nov 10, 2026)
+
+- **No false crew stalls during an upgrade.** While a site is being upgraded, the game reports it as short of crew, even a mine, which needs none. The bridge no longer posts "stopped: not enough crew" for a site under upgrade; it logs it, and "Upgrade complete" follows as before. A site under upgrade that runs out of an input is still posted.
+
+## 1.07.01 (Nov 9, 2026)
+
+- **Lite mode: two more news kinds get their own icon.** A company coming back after a long silence ("Some Company returned to business") is posted with 🔙, and a fleet driving pirates off ("Some Company's fleet drove The Ashen Fleet's ships from…") with ⚔️. Both were already posted, with the 📰 icon kept for news kinds the bridge doesn't know.
+
 ## 1.07.00 (Nov 8, 2026)
 
 - **Lite mode.** The bridge can now post only public game information, the same for every player, to one channel (`WEBHOOK_LITE`), for a server anyone may read. See "Lite mode" in the README.
