@@ -4,6 +4,17 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.07 (Nov 11, 2026)
+
+For the game's Nov 11 update (Faction Ambitions and the Codex).
+
+- **Standing advice uses each offer's own figures.** Board offers now say what they do to standing. An Ambition's survey gives +4 and costs rivals nothing, but was shown as a full contract's +10 and −5 off each rival. Offers that give no figure (Codex recoveries) are shown as a medium job: +4, rivals untouched.
+- **Clearer board labels.** Offers for a faction's Ambition are tagged `[AMBITION · Titan Waystation]` and Codex recoveries `[CODEX]`, instead of `[SPECIAL]`.
+- **Naming a colony (🏷️, Corp channel).** When an Ambition is done and we did the most stages, its colony is ours to name, but only before a time limit. The bridge posts it at once, with the limit, and again 24 real hours before it (`NAMING_WARNINGS_HOURS`).
+- **A Codex recovery that stops (⏹️, Corp channel).** If our craft leave an artifact site before its story is recovered, the recovery stops, and the game doesn't make that obvious. The bridge now posts it.
+- **Lite mode: Ambitions get 🎯.** "The Concord of Seven announced its next Ambition: Titan Waystation" was posted with 🛒, the icon for faction warship sales.
+- **Lite mode: Codex firsts grouped.** Several Codex firsts from one company in the same poll are one line: "Some Company was first to recover 3 documents: …". One company posted 6 in a minute.
+
 ## 1.07.06 (Nov 11, 2026)
 
 - **A server outage is one line in the status post.** When the game's server was down for nearly four hours, every read failed and the status post said "Problems logged: 4385 (API error ×4385)". Now server errors that keep coming for 5 minutes or more show as "Game server down: 1:20 AM–5:00 AM (3h 40m)", in each reader's own time, and only other problems are counted. Short blips are counted as before.

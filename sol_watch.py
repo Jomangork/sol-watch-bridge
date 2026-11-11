@@ -82,7 +82,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.06"
+VERSION = "1.07.07"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -155,6 +155,9 @@ BALLOT_WARNINGS_HOURS = (24, 12, 1)  # real hours before Earth's ballot closes, 
 # Earth's ballot (glossary "Ballot"): opens each game year on 1 January, nominations for 120 game days, then
 # voting for 168. Lite mode can't read /factions, so it works the close out from these.
 BALLOT_NOMINATION_DAYS, BALLOT_VOTING_DAYS = 120, 168
+# An Ambition done (build HML7qYMP): the company with the most stages names its colony, within a time limit
+# (nameUntil). When that's us, it's posted at once and again this many real hours before the limit.
+NAMING_WARNINGS_HOURS = (24,)
 # A stock's warnings are given again only after a refill: at least this many times the amount it had
 # when last warned. A stock made and used at the same rate wobbles, and would otherwise be warned again and again.
 COUNTDOWN_REFILL_FACTOR = 1.25
@@ -284,6 +287,11 @@ LITE_NEWS_NOISE = {  # kind: (one, several)
     "crew_lost": ("crew-lost item (posted from the memorial)", "crew-lost items (posted from the memorial)")}
 # Kinds cut to their first sentence: the rest (what a failed launch carried) is detail to look up in the game.
 LITE_FIRST_SENTENCE_ONLY = {"launch_failure"}
+# Faction news about an Ambition (build HML7qYMP: "The Concord of Seven announced its next Ambition: Titan Waystation.")
+# gets its own icon, not the faction kind's 🛒.
+LITE_AMBITION_ICON, LITE_AMBITION_RE = "🎯", re.compile(r"\bAmbition\b")
+# "Some Company was first to recover a tally sheet at Ceres orbit." Several from one company in a poll: one line.
+LITE_CODEX_FIRST_RE = re.compile(r"^(?P<company>.+?) was first to recover (?P<what>.+) at (?P<where>[^.]+?)\.?$")
 LITE_BALLOT_OPEN_RE = re.compile(r"Earth[’']s ballot is open: (?P<options>.+)")
 LITE_FORECAST_RE = re.compile(r"Space Weather Office|forecasts? a solar flare", re.IGNORECASE)
 
@@ -1565,8 +1573,10 @@ def standing_advice(ctx, faction_id, gain, hits_rivals):
         parts.append(f"no standing with {faction_short(faction_id)} (capped today)")
     else:
         parts.append(move(faction_id, earned, signed_tenths(earned)))
-    if hits_rivals:
-        parts += [move(rival, -RIVAL_PENALTY, signed(-RIVAL_PENALTY)) for rival in sorted(FACTION_RIVALS[faction_id])]
+    # hits_rivals: True takes RIVAL_PENALTY from each rival; a number (an offer's own standing.rival) takes that.
+    penalty = RIVAL_PENALTY if hits_rivals is True else float(hits_rivals or 0)
+    if penalty:
+        parts += [move(rival, -penalty, signed_tenths(-penalty)) for rival in sorted(FACTION_RIVALS[faction_id])]
     text = STANDING_IF_DONE + ", ".join(parts)
     if changes:
         text += " | ⚠️ " + "; ".join(changes)
@@ -1587,8 +1597,30 @@ def signed_tenths(value):
     return signed(value) if abs(value - round(value)) < 0.05 else f"{value:+.1f}".replace("-", "−")
 
 
-def describe_offer(offer, clock):
-    tier = (offer.get("tier") or "special").upper()
+def offer_label(offer, ambitions=None):
+    """The tag in a board post: the tier, or AMBITION · <its name> / CODEX for the offers that have none."""
+    if offer.get("ambitionId") is not None:
+        name = (ambitions or {}).get(offer["ambitionId"])
+        return f"AMBITION · {name}" if name else "AMBITION"
+    if offer.get("kind") == "codex_recover":
+        return "CODEX"
+    return (offer.get("tier") or "special").upper()
+
+
+def offer_standing(offer):
+    """(gain, what each rival loses) if the offer is done. Board offers carry their own standing {gain, rival} since
+    build HML7qYMP (a survey for an Ambition: +4 and nothing off rivals). A Codex recovery lists none: the glossary
+    puts it in the band of a faction's medium job. Otherwise a full contract: +10, −5 each rival."""
+    standing = offer.get("standing")
+    if isinstance(standing, dict) and isinstance(standing.get("gain"), (int, float)):
+        return standing["gain"], standing.get("rival") or 0
+    if offer.get("kind") == "codex_recover":
+        return STANDING_GAIN["medium"], 0
+    return STANDING_GAIN["contract"], True
+
+
+def describe_offer(offer, clock, ambitions=None):
+    tier = offer_label(offer, ambitions)
     reward = offer.get("reward") or {}
     rp = f" + {reward['rp']} RP" if reward.get("rp") else ""
     return (f"{clock.stamp(game_day=offer.get('postedDay'))} **[{tier}] {offer.get('title')}** | "
@@ -1617,8 +1649,8 @@ class ContractsWatcher(Watcher):
 
     def offer_text(self, offer):
         # A board contract delivered counts in full: +10 with the client, −5 with each of its rivals.
-        return self.with_advice(describe_offer(offer, self.ctx["clock"]), offer.get("factionId"),
-                                STANDING_GAIN["contract"], True)
+        return self.with_advice(describe_offer(offer, self.ctx["clock"], self.ctx.get("ambition_names")),
+                                offer.get("factionId"), *offer_standing(offer))
 
     def update(self, data, first):
         clock = self.ctx["clock"]
@@ -2823,6 +2855,7 @@ class FactionsWatcher(Watcher):
         super().__init__(ctx, webhook)
         self.reported, self.watch_hits = {}, set()
         self.ballot_countdown = Countdown(ctx["state"], "ballot_countdown", BALLOT_WARNINGS_HOURS)
+        self.naming_countdown = Countdown(ctx["state"], "naming_countdown", NAMING_WARNINGS_HOURS)
         # Ships bought from the exchange so far, saved so a purchase made during a restart is still posted.
         self.listings, self.bought = {}, ctx["state"].get("broker_bought")
 
@@ -3009,6 +3042,8 @@ class FactionsWatcher(Watcher):
         else:
             lines += ballot
 
+        lines += self.ambition_naming(data.get("ambitions") or [])
+
         # Clear Sky / bloodmark: not in the API today. Announce the first time the words show up.
         for source, body in (("factions", data), ("company", self.ctx.get("company_body") or {})):
             for path, value in find_words(body, WATCH_WORDS):
@@ -3020,6 +3055,48 @@ class FactionsWatcher(Watcher):
                                      f"`{key}` = `{json.dumps(value, ensure_ascii=False)[:150]}`")
                     else:
                         lines.append(f"🩸 **[CLEAR SKY]** Already in the API: `{key}`")
+        return lines
+
+
+    def is_us(self, who):
+        """namedBy hasn't been seen set: a company id, a name, or {companyId, name}."""
+        ctx = self.ctx
+        if isinstance(who, dict):
+            return who.get("companyId") == ctx.get("company_id") or (bool(who.get("name"))
+                                                                     and who.get("name") == ctx.get("company_name"))
+        if isinstance(who, bool):
+            return False
+        return (isinstance(who, int) and who == ctx.get("company_id")) or (
+            isinstance(who, str) and bool(who) and who == ctx.get("company_name"))
+
+    def ambition_naming(self, ambitions):
+        """Faction Ambitions (build HML7qYMP): {id, factionId, bodyId, name, status, stages, contributors, namedBy,
+        nameUntil, colonyName}. Their names label Ambition offers on the contract board. When one is done and it's
+        ours to name its colony, that's posted at once (saved, so once, even if it happened while we were stopped)
+        and again NAMING_WARNINGS_HOURS before the limit, until it has a name."""
+        ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
+        ambitions = [a for a in ambitions if isinstance(a, dict) and a.get("id") is not None]
+        ctx["ambition_names"] = {a["id"]: a.get("name") for a in ambitions if a.get("name")}
+        told = set(state.get("ambition_naming_told") or [])
+        lines, current = [], set()
+        for a in ambitions:
+            key = str(a["id"])
+            if a.get("colonyName") or not self.is_us(a.get("namedBy")):
+                continue
+            current.add(key)
+            until = a.get("nameUntil")
+            limit = f" by {clock.stamp(game_day=until)}" if isinstance(until, (int, float)) else ""
+            faction = faction_short(a.get("factionId")) if a.get("factionId") else "A faction"
+            mark = self.naming_countdown.check(("naming", key), clock.hours_until(until), False) \
+                if isinstance(until, (int, float)) else None
+            if key not in told:
+                lines.append(f"🏷️ {clock.stamp()} **We name the colony:** {faction}'s Ambition **{a.get('name')}** is "
+                             f"done and we did the most stages, so its colony is ours to name{limit}. Past that, "
+                             f"we lose the chance.")
+            elif mark:
+                lines.append(f"🏷️ {clock.stamp()} **Colony still to name ({mark}h left):** {a.get('name')}{limit}")
+        ids = {str(a["id"]) for a in ambitions}
+        state.set("ambition_naming_told", sorted((told & ids) | current))
         return lines
 
 
@@ -3197,7 +3274,12 @@ class AllianceWatcher(Watcher):
 
 
 class DiscoveriesWatcher(Watcher):
-    """Alliances that have marked us hostile (we were caught spying)."""
+    """Alliances that have marked us hostile (we were caught spying), and a Codex recovery that stopped.
+
+    codex.finds[] (build HML7qYMP): {storyId, title, what, placeId, where, foundDay, recoverEndDay, recoveredDay,
+    first}. recoverEndDay is set while ours recover it; craft that leave before then stop the recovery (glossary
+    "Artifact site"), which shows only as recoverEndDay going back to null with no recoveredDay. What was
+    recovering is saved in state.json, so a stop while we were stopped is still posted."""
     path, interval, header = "/discoveries", INTERVAL_SLOW, "ALLIANCE INTEL"
 
     def __init__(self, ctx, webhook):
@@ -3217,6 +3299,30 @@ class DiscoveriesWatcher(Watcher):
                     capture("discoveries-hostileTo", hostile[key])
                 lines.append(f"🕵️ {clock.stamp()} **We've been marked hostile:** {summarise(self.ctx, hostile[key])}")
         self.hostile = hostile
+        stopped = self.recoveries(data.get("codex"))
+        if stopped:  # ours, not the alliance's: to the Corp channel
+            corp = (self.ctx.get("webhooks") or {}).get("corp")
+            if corp:
+                self.ctx["discord"].post(corp, "CODEX", stopped)
+            else:
+                lines += stopped
+        return lines
+
+    def recoveries(self, codex):
+        if not isinstance(codex, dict) or not isinstance(codex.get("finds"), list):
+            return []
+        clock, state = self.ctx["clock"], self.ctx["state"]
+        finds = {f["storyId"]: f for f in codex["finds"] if isinstance(f, dict) and f.get("storyId")}
+        was = state.get("codex_recovering")
+        lines = []
+        for story_id in (was or {}):
+            f = finds.get(story_id)
+            if f and f.get("recoverEndDay") is None and f.get("recoveredDay") is None:
+                lines.append(f"⏹️ {clock.stamp()} **Codex recovery stopped:** {f.get('what') or f.get('title')} at "
+                             f"{f.get('where') or place_name(self.ctx, f.get('placeId'))}. Our craft there left before "
+                             f"it was recovered. Ships, an outpost or a lander there can start it again.")
+        state.set("codex_recovering", {story_id: f["recoverEndDay"] for story_id, f in finds.items()
+                                       if f.get("recoverEndDay") is not None and f.get("recoveredDay") is None})
         return lines
 
 
@@ -3921,6 +4027,7 @@ class LiteNewsWatcher(Watcher):
         seen = state.get("news_seen_id")
         newest = max([n["id"] for n in items] + [seen or 0])
         lines, counts = [], lite_counts(ctx)
+        firsts = {}  # type: dict  # company -> (index of its line in lines, [(stamp, what, where)])
         for n in sorted(items, key=lambda n: n["id"]):
             if seen is None or n["id"] <= seen:  # the first run ever only records where the news is
                 continue
@@ -3945,7 +4052,21 @@ class LiteNewsWatcher(Watcher):
             icon = LITE_NEWS_ICONS.get(kind, "📰")
             if kind == "range_expansion" and "opened a new launch pad" not in text:
                 icon = "🏗️"  # a pad still being built (materials asked for, halfway); 🚀 once it opens
-            lines.append(f"{icon} {clock.stamp(game_day=n.get('day'))} {text}")
+            if kind == "faction" and LITE_AMBITION_RE.search(text):
+                icon = LITE_AMBITION_ICON
+            stamp = clock.stamp(game_day=n.get("day"))
+            if kind == "frontier" and (found := LITE_CODEX_FIRST_RE.match(text)):
+                company = found["company"]
+                if company in firsts:
+                    firsts[company][1].append((stamp, found["what"], found["where"]))
+                    continue
+                firsts[company] = (len(lines), [(stamp, found["what"], found["where"])])
+            lines.append(f"{icon} {stamp} {text}")
+        for company, (index, found) in firsts.items():
+            if len(found) > 1:
+                listed = "; ".join(f"{what} ({where})" for _, what, where in found)
+                lines[index] = (f"{LITE_NEWS_ICONS['frontier']} {found[-1][0]} {company} was first to recover "
+                                f"{len(found)} documents: {listed}.")
         state.set("news_seen_id", newest)
         state.set("lite_counts", counts)
         if first and lines:  # news from while we were stopped: still worth posting, even after a --silent start
