@@ -82,7 +82,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.04"
+VERSION = "1.07.05"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -177,6 +177,13 @@ UPKEEP_GOODS = ("consumables", "equipment")
 CREWED_SITE_KINDS = ("refinery", "factory")
 # Don't re-announce the same site stalling within this many real hours.
 STALL_REPEAT_HOURS = 6
+# A site still producing is posted as slowed only below this share of its full output (nominalPerDay), and
+# once: again only if it falls this many points further, or after running above it for this many real hours.
+# A refinery that uses more ore than its own mine digs runs short for good, and drops on and off the game's
+# list as a little ore piles up; at full output the game may still name an upkeep good (build Ll3R8T5j).
+SLOWED_POST_BELOW_PERCENT = 90
+SLOWED_WORSE_BY_POINTS = 10
+SLOWED_RECOVERY_HOURS = 24
 
 # Rival warships heading for our places. Earth and Moon space (LEO station, Lunar orbit station, the Moon,
 # the Earth–Moon Lagrange points: places whose body is Earth or the Moon) is UEG space, where no fighting is
@@ -265,7 +272,8 @@ LITE_NEWS_ICONS = {
     "strike": "💣", "clear_sky": "✊", "founded": "🆕", "inactive": "🌑", "alliance": "🤝", "colony": "🏘️",
     "station": "🛰️", "outpost": "📍", "range_expansion": "🚀", "ueg_built": "🏗️", "ueg_navy": "⚓",
     "ueg_elevator": "🏛️", "badge_first": "🏅", "project_honor": "🏆", "market_event": "📈", "salvage": "♻️",
-    "abandoned": "🛸", "launch_failure": "💥", "outpost_surrendered": "🏳️", "return": "🔙", "terrorist_hunt": "⚔️"}
+    "abandoned": "🛸", "launch_failure": "💥", "outpost_surrendered": "🏳️", "return": "🔙", "terrorist_hunt": "⚔️",
+    "frontier": "🏺"}
 # Kinds only counted in the digest: frequent, or posted from elsewhere (crew lost comes from the memorial).
 # Hazard items that hit one craft count here too; flare forecasts are posted.
 LITE_NEWS_NOISE = {  # kind: (one, several)
@@ -568,6 +576,9 @@ SETTINGS_SPEC = (
     ("alerts", "deal_expiry_warning_minutes", "DEAL_EXPIRY_WARNING_MINUTES", "int", (1, 1440)),
     ("alerts", "stall_repeat_hours", "STALL_REPEAT_HOURS", "float", (0, 168)),
     ("alerts", "ignored_stall_reasons", "IGNORED_STALL_REASONS", "set", None),
+    ("alerts", "slowed_post_below_percent", "SLOWED_POST_BELOW_PERCENT", "float", (1, 100)),
+    ("alerts", "slowed_worse_by_points", "SLOWED_WORSE_BY_POINTS", "float", (1, 100)),
+    ("alerts", "slowed_recovery_hours", "SLOWED_RECOVERY_HOURS", "float", (0, 720)),
     ("alerts", "standing_alert_step", "STANDING_ALERT_STEP", "float", (0.1, 100)),
     ("alerts", "status_times", "STATUS_TIMES", "times", None),
     ("alerts", "daily_status_hour", "DAILY_STATUS_HOUR", "hour", None),  # older, one whole hour
@@ -2443,6 +2454,8 @@ class IndustryWatcher(Watcher):
         # the same place in the same poll are posted as one message, grouped by reason.
         # heldBy names what limits a site, not that it stopped: a site short of crew keeps running at reduced
         # output. One still producing (outputPerDay > 0) is posted as "slowed", one producing nothing as "stopped".
+        # A slowed site is posted only below SLOWED_POST_BELOW_PERCENT of its full output, with that share, and
+        # not again until it falls SLOWED_WORSE_BY_POINTS further or has run above it for SLOWED_RECOVERY_HOURS.
         # The game names one reason per site, so a stall blamed on crew can hide missing upkeep goods: off Earth,
         # an upkeep good counts as missing where the place has none of it, or a site there names it as its limit.
         stalls, stopped = {}, {}  # stopped: (place name, "stopped"/"slowed") -> {reason text: ["factory (Steel)", ...]}
@@ -2463,6 +2476,11 @@ class IndustryWatcher(Watcher):
         def stock_qty(place, good):
             return qty_text((stock.get((place, good)) or (0, 0))[0])
 
+        state_store = ctx.get("state")
+        slow = {site_key: dict(posted) for site_key, posted in  # a copy, so State.set sees what changed
+                ((state_store.get("slowed_posted") if state_store else getattr(self, "slowed_posted", None)) or {}).items()}
+        slow_now = set()  # sites slowed below SLOWED_POST_BELOW_PERCENT this poll
+
         for site in flows.get("sites", []):
             held, site_id = site.get("heldBy"), site.get("siteId")
             if not held or held in IGNORED_STALL_REASONS:
@@ -2473,11 +2491,28 @@ class IndustryWatcher(Watcher):
             seen = seen + 1 if old_reason == reason else 1
             stalls[site_id] = (reason, seen)
             announce_key = (site_id, state)  # a site that slowed and then stopped gets both posts
+            pct = None
+            if state == "slowed":
+                nominal = site.get("nominalPerDay") or 0
+                pct = 100 * (site.get("outputPerDay") or 0) / nominal if nominal > 0 else None
+                if pct is not None and pct >= SLOWED_POST_BELOW_PERCENT:
+                    continue  # hardly slowed: the game names a limit, but little or nothing is lost
+                site_key = str(site_id)
+                slow_now.add(site_key)
+                posted = slow.get(site_key)
+                if first:
+                    slow.setdefault(site_key, {"pct": pct, "okSince": None})
+                    continue
+                worse = posted is not None and pct is not None and posted.get("pct") is not None \
+                    and pct <= posted["pct"] - SLOWED_WORSE_BY_POINTS
+                if seen < 2 or (posted is not None and not worse):
+                    continue
+                slow[site_key] = {"pct": pct, "okSince": None}
             if first:
                 self.stall_announced[announce_key] = time.monotonic()
                 continue
             recently = time.monotonic() - self.stall_announced.get(announce_key, -1e9) < STALL_REPEAT_HOURS * 3600
-            if seen == 2 and not recently:
+            if state == "slowed" or (seen == 2 and not recently):
                 self.stall_announced[announce_key] = time.monotonic()
                 walkout = (ctx.get("walkouts") or {}).get(site.get("placeId"))
                 if held == "staffing" and walkout and clock.now_game_day() < walkout:
@@ -2513,8 +2548,22 @@ class IndustryWatcher(Watcher):
                            "damaged": "outpost hit by a hazard, works again on its own",
                            "staffing": f"not enough crew{staff_note}",
                            "upkeep": f"can't pay upkeep ({limiting})"}.get(held, held)
-                what = f"{site.get('kind')} ({good_name(ctx, site.get('goodId'))})"
+                share = f", {pct:.0f}%" if pct is not None else ""
+                what = f"{site.get('kind')} ({good_name(ctx, site.get('goodId'))}{share})"
                 stopped.setdefault(place_state, {}).setdefault(why, []).append(what)
+        # A slowed site that has run above the bar (or stopped being held) long enough may be posted again.
+        now = time.time()
+        for site_key, posted in list(slow.items()):
+            if site_key in slow_now:
+                posted["okSince"] = None
+            elif posted.get("okSince") is None:
+                posted["okSince"] = now
+            elif now - posted["okSince"] >= SLOWED_RECOVERY_HOURS * 3600:
+                del slow[site_key]
+        if state_store:
+            state_store.set("slowed_posted", slow)
+        else:
+            self.slowed_posted = slow
         for (place, state), reasons in stopped.items():
             lines.append(stall_text(clock.stamp(), place, reasons, state, notes.get((place, state))))
         self.stalls = stalls

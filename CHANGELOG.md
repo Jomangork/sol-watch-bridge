@@ -4,6 +4,11 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.05 (Nov 10, 2026)
+
+- **Fewer "slowed" posts.** A site still producing is now posted as 🐢 slowed only when it makes under 90% of its full output, and the post gives its share, e.g. "refinery (Copper, 80%)". It is posted once. A refinery that uses more ore than its own mine digs stays short for good and drops on and off the game's list as a little ore piles up, so it used to be posted again every 6 hours. Now it is posted again only if it falls 10 more points, or after running above 90% for 24 real hours. Sites the game says are held by upkeep while still at full output, and tiny crew shortfalls, aren't posted. Stopped sites are posted as before. The three numbers are `slowed_post_below_percent`, `slowed_worse_by_points` and `slowed_recovery_hours` in `settings.ini`.
+- **Lite mode: Codex firsts get 🏺.** A company first to recover a Codex story ("Some Company was first to recover an observer's notebook at low Earth orbit"), new in the game's Nov 10 update, was posted with 📰 as a kind the bridge didn't know.
+
 ## 1.07.04 (Nov 10, 2026)
 
 - **Earth's ballot closing.** Both modes now warn 24, 12 and 1 real hours before the yearly ballot's voting closes (🗳️), with what's on the ballot. The full bridge adds our vote, or "⚠️ We haven't voted yet". Lite mode can't read the ballot, so it works the close out from the game's schedule (1 January, then 120 game days of nominations and 168 of voting). The hours are `ballot_warnings_hours` in `settings.ini`.
