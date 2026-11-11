@@ -188,7 +188,7 @@ Two files, both next to `sol_watch.py`. Neither is ever part of a download, so u
 | `[updates]` | `update_check` (yes), and for a fork `project_url` and `source_url`. |
 | `[intervals]` | Seconds between checks of each part of the API, at least 10. The defaults use about 21 of the API's 60 reads a minute per key; the bridge warns if yours add up to more than 40. |
 
-The 🟢 BRIDGE STATUS post gives the version, uptime, polls, and the game updates and problems since the previous status post (at most 24 h), and the game build. If the bridge was down over one or more of the times, it posts once when it's back. Brief server outages (HTTP 502/503/504 or a dropped connection) within 10 minutes of an update going live are counted with the update ("2 brief outages during them"), not as problems; `errors.log` still records them all.
+The 🟢 BRIDGE STATUS post gives the version, uptime, polls, and the game updates and problems since the previous status post (at most 24 h), and the game build. If the bridge was down over one or more of the times, it posts once when it's back. Brief server outages (HTTP 502/503/504, 52x/53x from the game's CDN, or a dropped connection) within 10 minutes of an update going live are counted with the update ("2 brief outages during them"), not as problems. Server errors that keep coming for 5 minutes or more at another time show as one line, "Game server down: 1:20 AM–5:00 AM (3h 40m)", in each reader's own time; `errors.log` still records them all.
 
 `DERELICT_CHECK_MINUTES`, `DERELICT_MIN_VALUE` and `IRL_TIMEZONE` still work in `.env` too, as in earlier versions, and win over `settings.ini`.
 

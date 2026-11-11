@@ -82,7 +82,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.05"
+VERSION = "1.07.06"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -356,8 +356,12 @@ PROBLEM_TAGS = re.compile(r"^\[(Network error|API error|Rate limited|Discord err
 
 PROBLEMS = deque()  # (time, tag, message) of each problem logged, for the daily status (pruned to 24 h)
 # The server going briefly away. Near a game update's go-live time these are the update, not a problem.
-OUTAGE = re.compile(r"^\[Network error\]|^\[API error\] .*HTTP (50[234]|52\d)\b")
+OUTAGE = re.compile(r"^\[Network error\]|^\[API error\] .*HTTP (50[234]|5[23]\d)\b")  # 52x/53x: the CDN in front
 UPDATE_OUTAGE_WINDOW_SECONDS = 600  # outages this close to a game update count as part of it
+# Outage errors with no more than this gap between them are one outage; one lasting at least OUTAGE_MIN_SECONDS
+# is a server outage in the status post ("Game server down 1:20–5:00 AM (3h 40m)"), not thousands of problems.
+OUTAGE_GAP_SECONDS = 600
+OUTAGE_MIN_SECONDS = 300
 
 
 def log(message, detail=None):
@@ -1162,14 +1166,27 @@ class DailyStatus:
         cutoff = time.time() - span
         window = f"{span / 3600:.0f}h"
         updates = [u for u in (self.ctx["state"].get("game_updates") or []) if u >= cutoff]
-        tags, excused = {}, 0
+        tags, excused, spells = {}, 0, []  # spells: [start, end, [tags]] of outage errors close together
         for when, tag, message in PROBLEMS:
             if when < cutoff:
                 continue
-            if OUTAGE.match(message) and any(abs(when - u) <= UPDATE_OUTAGE_WINDOW_SECONDS for u in updates):
-                excused += 1  # the server restarting for a game update
+            if OUTAGE.match(message):
+                if any(abs(when - u) <= UPDATE_OUTAGE_WINDOW_SECONDS for u in updates):
+                    excused += 1  # the server restarting for a game update
+                elif spells and when - spells[-1][1] <= OUTAGE_GAP_SECONDS:
+                    spells[-1][1] = when
+                    spells[-1][2].append(tag)
+                else:
+                    spells.append([when, when, [tag]])
                 continue
             tags[tag] = tags.get(tag, 0) + 1
+        downs = []
+        for start, end, spell_tags in spells:
+            if end - start >= OUTAGE_MIN_SECONDS:
+                downs.append(f"<t:{int(start)}:t>–<t:{int(end)}:t> ({duration_text(end - start)})")
+            else:  # a blip: counted as the errors it was
+                for tag in spell_tags:
+                    tags[tag] = tags.get(tag, 0) + 1
         problems = (f"{sum(tags.values())} in {window} (" + ", ".join(f"{t} ×{n}" for t, n in sorted(tags.items(), key=lambda kv: -kv[1]))
                     + ")") if tags else f"none in {window}"
         game_updates = f"{len(updates)} in {window}" if updates else f"none in {window}"
@@ -1179,7 +1196,8 @@ class DailyStatus:
         queued = len(getattr(self.ctx["discord"], "queue", []) or [])
         return (f"🟢 **[BRIDGE STATUS]** Sol-Watch v{VERSION} running for {uptime} | "
                 f"{POLL_COUNTS['polls']:,} polls, {POLL_COUNTS['failed']:,} failed | Game updates: {game_updates} | "
-                f"Problems logged: {problems}"
+                + (f"Game server down: {', '.join(downs)} | " if downs else "")
+                + f"Problems logged: {problems}"
                 + (f" | {queued} Discord message(s) waiting to send" if queued else "")
                 + (f" | Game build: {build}" if build else ""))
 
@@ -2147,6 +2165,13 @@ def stall_text(stamp, place, reasons, state="stopped", note=None):
         return f"{icon} {stamp} **{sites[0]} at {place} {state}:** {why}"
     head = f"{icon} {stamp} **{count} sites at {place} {state}:**" + (f" {note}" if note else "")
     return head + "".join("\n• " + (f"**{why}:** " if why else "") + ", ".join(sites) for why, sites in reasons.items())
+
+
+def duration_text(seconds):
+    """A real span: '45m', '3h 40m', '2h'."""
+    minutes = int(round(seconds / 60))
+    hours, minutes = divmod(minutes, 60)
+    return f"{hours}h {minutes}m" if hours and minutes else f"{hours}h" if hours else f"{minutes}m"
 
 
 def qty_text(qty):

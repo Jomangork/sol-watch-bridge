@@ -4,6 +4,11 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.06 (Nov 11, 2026)
+
+- **A server outage is one line in the status post.** When the game's server was down for nearly four hours, every read failed and the status post said "Problems logged: 4385 (API error ×4385)". Now server errors that keep coming for 5 minutes or more show as "Game server down: 1:20 AM–5:00 AM (3h 40m)", in each reader's own time, and only other problems are counted. Short blips are counted as before.
+- **HTTP 530 counts as the server being down.** The game's CDN sends it when the server behind it doesn't answer; it was logged as a problem of its own.
+
 ## 1.07.05 (Nov 10, 2026)
 
 - **Fewer "slowed" posts.** A site still producing is now posted as 🐢 slowed only when it makes under 90% of its full output, and the post gives its share, e.g. "refinery (Copper, 80%)". It is posted once. A refinery that uses more ore than its own mine digs stays short for good and drops on and off the game's list as a little ore piles up, so it used to be posted again every 6 hours. Now it is posted again only if it falls 10 more points, or after running above 90% for 24 real hours. Sites the game says are held by upkeep while still at full output, and tiny crew shortfalls, aren't posted. Stopped sites are posted as before. The three numbers are `slowed_post_below_percent`, `slowed_worse_by_points` and `slowed_recovery_hours` in `settings.ini`.
