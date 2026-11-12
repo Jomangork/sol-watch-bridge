@@ -58,6 +58,7 @@ API behaviour this script relies on (checked against the live API, Nov 2026):
     - Chat, loss and hazard-damage ids are integers that only grow.
 """
 
+import bisect
 import hashlib
 import json
 import logging
@@ -82,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.07"
+VERSION = "1.07.08"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -164,6 +165,8 @@ COUNTDOWN_REFILL_FACTOR = 1.25
 # A stock running out within this many real hours is already empty for practical purposes
 # (e.g. "runs out in 5m" with 0.5 t left): its warning is left to the production-stall alert.
 STOCK_ALREADY_EMPTY_HOURS = 0.25
+# Nor when what's left shows as 0.0: a crumb used a crumb at a time can still last hours ("0.0 left, using 0.00/day").
+STOCK_ALREADY_EMPTY_QTY = 0.05
 
 # Queue reasons that only mean "waiting for the level before this one" - not problems.
 # Queue reasons that only report progress, not a block.
@@ -289,7 +292,17 @@ LITE_NEWS_NOISE = {  # kind: (one, several)
 LITE_FIRST_SENTENCE_ONLY = {"launch_failure"}
 # Faction news about an Ambition (build HML7qYMP: "The Concord of Seven announced its next Ambition: Titan Waystation.")
 # gets its own icon, not the faction kind's 🛒.
-LITE_AMBITION_ICON, LITE_AMBITION_RE = "🎯", re.compile(r"\bAmbition\b")
+# Its end names no Ambition: "The Western Space Alliance finished Europa Ice Works, built with Some Company and …".
+LITE_AMBITION_ICON = "🎯"
+LITE_AMBITION_RE = re.compile(r"\bAmbition\b| finished .+, built with ")
+# A faction's colony on its way (1.07.08): "Pwyll has its habitat. WSA now wants 20 settlers there.", "… opened its
+# colony at Pwyll, Europa." Posted with the colony kind's icon, not 🛒.
+LITE_FACTION_COLONY_RE = re.compile(r"\bcolony\b|\bsettlers\b|\bhas its habitat\b")
+# The game announces a new UEG Navy ship more than once ("handed UES Amazon over …", later the same again, or
+# "took delivery of" / "commissioned" in other words). Only the first naming a ship is posted; the names are kept.
+LITE_NAVY_NEW_SHIP_RE = re.compile(r"\b(handed|took delivery|commissioned|joined the UEG Navy)\b")
+LITE_NAVY_SHIP_NAME_RE = re.compile(r"\bUES ([A-Z][\w'’-]*(?: [A-Z][\w'’-]*)*)")
+LITE_NAVY_SHIPS_KEPT = 300
 # "Some Company was first to recover a tally sheet at Ceres orbit." Several from one company in a poll: one line.
 LITE_CODEX_FIRST_RE = re.compile(r"^(?P<company>.+?) was first to recover (?P<what>.+) at (?P<where>[^.]+?)\.?$")
 LITE_BALLOT_OPEN_RE = re.compile(r"Earth[’']s ballot is open: (?P<options>.+)")
@@ -370,6 +383,24 @@ UPDATE_OUTAGE_WINDOW_SECONDS = 600  # outages this close to a game update count 
 # is a server outage in the status post ("Game server down 1:20–5:00 AM (3h 40m)"), not thousands of problems.
 OUTAGE_GAP_SECONDS = 600
 OUTAGE_MIN_SECONDS = 300
+# When the game's server last answered (200 or 304), a few seconds apart at most, for 24 h. A read that got through
+# ends an outage spell: scattered dropped connections whose retries succeed aren't the server being down (1.07.08).
+READS_OK = deque()
+READS_OK_STEP_SECONDS = 5
+
+
+def read_ok(now=None):
+    now = time.time() if now is None else now
+    if not READS_OK or now - READS_OK[-1] >= READS_OK_STEP_SECONDS:
+        READS_OK.append(now)
+        while READS_OK and READS_OK[0] < now - 86400:
+            READS_OK.popleft()
+
+
+def read_ok_between(start, end):
+    """True if the server answered after start and before end."""
+    i = bisect.bisect_right(READS_OK, start)
+    return i < len(READS_OK) and READS_OK[i] < end
 
 
 def log(message, detail=None):
@@ -834,6 +865,7 @@ class SolApi:
                 continue
 
             if response.status_code in (200, 304) and not path.startswith("http"):
+                read_ok()
                 if self.rejected:
                     self.rejected = False
                     self.alert("🔑 The game accepts our API key again. The bridge is reading as usual.")
@@ -1038,6 +1070,7 @@ class Discord:
         return True
 
     def post(self, webhook_url, header, lines):
+        lines = merge_repeats(lines)
         for line in lines:
             log(line)
         if not self.enabled or not lines:
@@ -1053,6 +1086,21 @@ class Discord:
         chunks.append(current)
         for chunk in chunks:
             self.send(webhook_url, chunk[:2000])
+
+
+def merge_repeats(lines):
+    """The same line twice in one post becomes one, marked ×2 at the end of its first line: two docking rings
+    upgraded at once, or two contracts of one title won together, read as one thing posted twice."""
+    counts = {}  # type: dict
+    for line in lines:
+        counts[line] = counts.get(line, 0) + 1
+    merged = []
+    for line, n in counts.items():
+        if n > 1:
+            first, _, rest = line.partition("\n")
+            line = f"{first} (×{n})" + (f"\n{rest}" if rest else "")
+        merged.append(line)
+    return merged
 
 
 def retry_after(response):
@@ -1102,9 +1150,14 @@ def money(value):
     return f"${value:,.1f}M" if isinstance(value, (int, float)) else "$?M"
 
 
+COMPANY_KINDS: dict = {}  # company id -> "navy", "exchange" or "pirate" (players have none), from /companies
+
+
 def load_company_names(api):
     data = api.get("/companies", use_etag=False) or {}
-    return {c["id"]: c.get("name", f"Company #{c['id']}") for c in data.get("companies", []) if "id" in c}
+    companies = [c for c in data.get("companies", []) if isinstance(c, dict) and "id" in c]
+    COMPANY_KINDS.update({c["id"]: c["kind"] for c in companies if c.get("kind")})
+    return {c["id"]: c.get("name", f"Company #{c['id']}") for c in companies}
 
 
 def newest_id(items):
@@ -1181,7 +1234,8 @@ class DailyStatus:
             if OUTAGE.match(message):
                 if any(abs(when - u) <= UPDATE_OUTAGE_WINDOW_SECONDS for u in updates):
                     excused += 1  # the server restarting for a game update
-                elif spells and when - spells[-1][1] <= OUTAGE_GAP_SECONDS:
+                elif spells and when - spells[-1][1] <= OUTAGE_GAP_SECONDS \
+                        and not read_ok_between(spells[-1][1], when):
                     spells[-1][1] = when
                     spells[-1][2].append(tag)
                 else:
@@ -2497,7 +2551,7 @@ class IndustryWatcher(Watcher):
             hours = clock.game_days_to_hours(qty / -rate)
             kind = "maintenance" if upkeep < 0 and consumed >= 0 else "production input"
             mark = self.countdown.check(("stock", place, good), hours, first, amount=qty)
-            if mark and hours < STOCK_ALREADY_EMPTY_HOURS:
+            if mark and (hours < STOCK_ALREADY_EMPTY_HOURS or qty < STOCK_ALREADY_EMPTY_QTY):
                 # e.g. "Water ice runs out in 5m" with 0.5 t left: it's empty already, and the
                 # production-stall alert says so once the site stops.
                 log(f"[Stock] {good} at {place}: {qty:,.1f} left, out in {hours_text(hours)}; not posted (effectively empty)")
@@ -2663,6 +2717,66 @@ class IndustryWatcher(Watcher):
         return lines
 
 
+def space_place(ctx, place_id):
+    """A place, or a point in space ('pt:sun:3.228:67.74:0.275': 3.2 AU from the Sun) in words."""
+    parts = str(place_id or "").lower().split(":")
+    if len(parts) >= 3 and parts[0] == "pt":
+        if parts[1] != "sun":
+            return f"deep space near {body_name(ctx, parts[1])}"
+        try:
+            au = float(parts[2])
+        except ValueError:
+            return "deep space"
+        return ("the asteroid belt" if 2.0 <= au <= 3.4 else "deep space") + f" ({au:.1f} AU from the Sun)"
+    return place_name(ctx, place_id)
+
+
+def side_text(ctx, company_id):
+    """'Some Company (ally)', 'The Ashen Fleet (pirates)' or 'us'."""
+    if company_id == ctx.get("company_id"):
+        return "us"
+    name = ctx.get("company_names", {}).get(company_id, f"company #{company_id}")
+    if company_id in ctx.get("ally_ids", set()):
+        return f"{name} (ally)"
+    return f"{name} (pirates)" if COMPANY_KINDS.get(company_id) == "pirate" else name
+
+
+def battle_text(ctx, battle, wrecks=()):
+    """fleets/map battles[] (first seen 2026-11-10): {id, day, placeId, attackerId, defenderId, attackerLosses,
+    defenderLosses, passes[{attackUnits, ...}], seized}. Wrecks name the ships lost (wrecks[].battleId)."""
+    names = ctx.get("unit_names") or {}
+    attacker, defender = side_text(ctx, battle.get("attackerId")), side_text(ctx, battle.get("defenderId"))
+    lost_ships = {}
+    for wreck in wrecks:
+        if wreck.get("battleId") == battle.get("id") and (wreck.get("ship") or {}).get("name"):
+            lost_ships.setdefault(wreck.get("ownerId"), []).append(wreck["ship"]["name"])
+
+    def losses(side_id, units, who):
+        if not units:
+            return f"{who} lost nothing"
+        wrecked = lost_ships.get(side_id)
+        return f"{who} lost {units_text(units, names)}" + (f" ({', '.join(wrecked)} wrecked)" if wrecked else "")
+
+    passes = [p for p in battle.get("passes") or [] if isinstance(p, dict)]
+    attack_units = next((p.get("attackUnits") for p in passes if p.get("attackUnits")), None)
+    detail = ", ".join(x for x in (f"{len(passes)} pass{'es' if len(passes) != 1 else ''}" if passes else "",
+                                   f"attacking with {units_text(attack_units, names)}" if attack_units else "") if x)
+    return (f"**{attacker}** attacked **{defender}** in {space_place(ctx, battle.get('placeId'))}: "
+            f"{losses(battle.get('defenderId'), battle.get('defenderLosses'), defender)}; "
+            f"{losses(battle.get('attackerId'), battle.get('attackerLosses'), attacker)}"
+            + (" | the defender's place was seized" if battle.get("seized") else "") + (f" | {detail}" if detail else ""))
+
+
+def wreck_text(ctx, wreck):
+    """fleets/map wrecks[]: {id, placeId, unitId, ownerId, ship {name, ...}, wreckedDay, expiresDay, battleId}."""
+    clock, ship = ctx["clock"], wreck.get("ship") or {}
+    unit = (ctx.get("unit_names") or {}).get(wreck.get("unitId"), tidy_id(wreck.get("unitId") or "ship").lower())
+    name = f" **{ship['name']}**" if ship.get("name") else ""
+    until = f" | Drifts there until {clock.stamp(game_day=wreck['expiresDay'])}" \
+        if isinstance(wreck.get("expiresDay"), (int, float)) else ""
+    return f"{side_text(ctx, wreck.get('ownerId'))}'s {unit}{name} wrecked in {space_place(ctx, wreck.get('placeId'))}{until}"
+
+
 def mentions_company(item, company_ids):
     """True if any company-ish field anywhere in item holds one of company_ids."""
     if isinstance(item, dict):
@@ -2789,6 +2903,7 @@ class FleetMapWatcher(Watcher):
         self.legacy_ids = set()
         self.ctx["state"].set("fleet_moves", sorted(self.moves))
 
+        posted_battles = set()  # battles posted this poll: their wrecks are named in the battle's post
         for list_name, label in self.combat_lists:
             items = {item_key(i): i for i in data.get(list_name, [])}
             for key in items.keys() - self.seen.get(list_name, {}).keys():
@@ -2798,10 +2913,21 @@ class FleetMapWatcher(Watcher):
                     capture(f"fleets_map-{list_name}", item)
                 if first:
                     continue
-                if mentions_company(item, friends):
-                    lines.append(f"⚔️ **[{label.upper()} - US OR ALLIES]** {clock.stamp()} {summarise(ctx, item)}")
+                if list_name == "battles":
+                    posted_battles.add(item.get("id"))
+                elif list_name == "wrecks" and item.get("battleId") is not None and item["battleId"] in posted_battles:
+                    continue
+                if list_name == "battles":
+                    text, when = battle_text(ctx, item, data.get("wrecks") or []), item.get("day")
+                elif list_name == "wrecks":
+                    text, when = wreck_text(ctx, item), item.get("wreckedDay")
                 else:
-                    elsewhere.append(f"⚔️ {clock.stamp()} New {label} elsewhere: {summarise(ctx, item)}")
+                    text, when = summarise(ctx, item), None
+                stamp = clock.stamp(game_day=when) if isinstance(when, (int, float)) else clock.stamp()
+                if mentions_company(item, friends):
+                    lines.append(f"⚔️ **[{label.upper()} - US OR ALLIES]** {stamp} {text}")
+                else:
+                    elsewhere.append(f"⚔️ {stamp} New {label} elsewhere: {text}")
             self.seen[list_name] = items
 
         # Incoming fleets are security alerts: always posted, even as a startup baseline.
@@ -4028,6 +4154,7 @@ class LiteNewsWatcher(Watcher):
         newest = max([n["id"] for n in items] + [seen or 0])
         lines, counts = [], lite_counts(ctx)
         firsts = {}  # type: dict  # company -> (index of its line in lines, [(stamp, what, where)])
+        navy_ships = list(state.get("lite_navy_ships") or [])
         for n in sorted(items, key=lambda n: n["id"]):
             if seen is None or n["id"] <= seen:  # the first run ever only records where the news is
                 continue
@@ -4054,6 +4181,15 @@ class LiteNewsWatcher(Watcher):
                 icon = "🏗️"  # a pad still being built (materials asked for, halfway); 🚀 once it opens
             if kind == "faction" and LITE_AMBITION_RE.search(text):
                 icon = LITE_AMBITION_ICON
+            elif kind == "faction" and LITE_FACTION_COLONY_RE.search(text):
+                icon = LITE_NEWS_ICONS["colony"]
+            if kind == "ueg_navy" and LITE_NAVY_NEW_SHIP_RE.search(text):
+                ships = set(LITE_NAVY_SHIP_NAME_RE.findall(text))
+                if ships and ships <= set(navy_ships):
+                    log(f"[Lite] Already announced, not posted again: {text}")
+                    counts["posted"] -= 1
+                    continue
+                navy_ships += sorted(ships - set(navy_ships))
             stamp = clock.stamp(game_day=n.get("day"))
             if kind == "frontier" and (found := LITE_CODEX_FIRST_RE.match(text)):
                 company = found["company"]
@@ -4068,6 +4204,7 @@ class LiteNewsWatcher(Watcher):
                 lines[index] = (f"{LITE_NEWS_ICONS['frontier']} {found[-1][0]} {company} was first to recover "
                                 f"{len(found)} documents: {listed}.")
         state.set("news_seen_id", newest)
+        state.set("lite_navy_ships", navy_ships[-LITE_NAVY_SHIPS_KEPT:])
         state.set("lite_counts", counts)
         if first and lines:  # news from while we were stopped: still worth posting, even after a --silent start
             ctx["discord"].post(self.webhook, self.header, lines)

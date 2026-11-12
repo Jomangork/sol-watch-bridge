@@ -4,6 +4,16 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.08 (Nov 11, 2026)
+
+Fixes from a day's logs.
+
+- **No false "Game server down".** Since Nov 11 the game drops a connection every few minutes. The retry gets through, but 1.07.06 joined these drops into outage spells: five "Game server down" lines on an afternoon when nothing failed. A read that gets through now ends a spell, so only a real outage is reported. Scattered drops are counted as problems.
+- **Battles are described.** A battle involving us or our allies said only "placeId: Pt:sun:3.228:67.74:0.275". It now reads, for example, "**Some Company (ally)** attacked **The Ashen Fleet (pirates)** in the asteroid belt (3.2 AU from the Sun): The Ashen Fleet (pirates) lost 1× Mining ship (UEG-M-06 wrecked); Some Company (ally) lost nothing | 1 pass, attacking with 1× Corvette". Wrecks name the ship, its owner, the place and how long it drifts there. A battle's wrecks are named in its post, not posted again.
+- **No warnings for stock already gone.** Stock that shows as "0.0 left, using 0.00/day" was warned as "runs out in 1h". It's now only logged, as other empty stock is.
+- **The same line twice in one post is shown once, with ×2:** two docking rings finishing their upgrade together, or two contracts with the same title won at once.
+- **Lite mode:** a finished Ambition ("… finished Europa Ice Works, built with …") gets 🎯, and a faction's colony news gets 🏘️, instead of 🛒. A UEG Navy ship the game announces again (it announced some twice, days apart, sometimes in other words) is posted only the first time.
+
 ## 1.07.07 (Nov 11, 2026)
 
 For the game's Nov 11 update (Faction Ambitions and the Codex).
