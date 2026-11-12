@@ -4,6 +4,10 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.09 (Nov 12, 2026)
+
+- **A battle between two other companies no longer stops fleet alerts.** A battle where neither side was us or an ally, and one side lost ships (for example a navy attacking pirates), made the fleet map check fail each time the map changed. That check also sends INCOMING FLEET alerts, so one could have been missed, and the battle itself was never posted under "battles elsewhere". Both work again.
+
 ## 1.07.08 (Nov 11, 2026)
 
 Fixes from a day's logs.

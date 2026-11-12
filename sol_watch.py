@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.08"
+VERSION = "1.07.09"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -2778,12 +2778,16 @@ def wreck_text(ctx, wreck):
 
 
 def mentions_company(item, company_ids):
-    """True if any company-ish field anywhere in item holds one of company_ids."""
+    """True if any company-ish field anywhere in item holds one of company_ids. Only plain ids are compared: a
+    company-ish field can hold a dict (a battle's attackerLosses), which a set lookup can't take."""
+    def is_ours(v):
+        return isinstance(v, (int, str)) and v in company_ids
+
     if isinstance(item, dict):
         for key, value in item.items():
             lowered = key.lower()
             if any(w in lowered for w in ("company", "attacker", "defender", "owner", "side", "target")) and (
-                    value in company_ids or (isinstance(value, list) and any(v in company_ids for v in value))):
+                    is_ours(value) or (isinstance(value, list) and any(is_ours(v) for v in value))):
                 return True
             if mentions_company(value, company_ids):
                 return True
