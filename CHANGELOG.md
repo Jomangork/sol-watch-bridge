@@ -4,6 +4,10 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.10 (Nov 12, 2026)
+
+- **A full plant is no longer posted as stopped.** A refinery or factory stops once its own good reaches your keep limit, as a mine does. The game reports a full mine as held by its keep limit, but a refinery or factory as held by "staffing" whenever the crew is even slightly short. The bridge then posted "crew is short, but that only slows production, so something else is missing too", for example for fuel and catalyst plants sitting at their limit. These are now only logged.
+
 ## 1.07.09 (Nov 12, 2026)
 
 - **A battle between two other companies no longer stops fleet alerts.** A battle where neither side was us or an ally, and one side lost ships (for example a navy attacking pirates), made the fleet map check fail each time the map changed. That check also sends INCOMING FLEET alerts, so one could have been missed, and the battle itself was never posted under "battles elsewhere". Both work again.

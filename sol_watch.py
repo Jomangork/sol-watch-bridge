@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.09"
+VERSION = "1.07.10"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -177,6 +177,7 @@ UPGRADE_DONE_SLACK_DAYS = 0.1
 
 # Production stalls that are our own choice, not problems.
 IGNORED_STALL_REASONS = {"paused", "keepLimit"}
+KEEP_LIMIT_SLACK = 0.01  # a site "held by staffing" whose own good is within this of our keep limit is full, not a stall
 # Off Earth, a place out of either of these stops all its production; a crew shortage only slows
 # refineries and factories, and mines run without full crew (player, 2026-11-05).
 UPKEEP_GOODS = ("consumables", "equipment")
@@ -2483,6 +2484,7 @@ class IndustryWatcher(Watcher):
         self.storage_low = {}     # store -> polls in a row it has looked like filling within the warnings
         self.stalls = {}          # siteId -> (heldBy, polls seen)
         self.stall_announced = {}  # (siteId, "stopped"/"slowed") -> monotonic time last announced
+        self.keep_full_logged = set()  # sites held at our keep limit, logged once
 
     def poll(self):
         industry = self.ctx["api"].get_latest("/industry")
@@ -2587,6 +2589,11 @@ class IndustryWatcher(Watcher):
         def stock_qty(place, good):
             return qty_text((stock.get((place, good)) or (0, 0))[0])
 
+        def at_keep_limit(site):
+            limit = keep.get((site.get("placeId"), site.get("goodId")))
+            have = (stock.get((site.get("placeId"), site.get("goodId"))) or (0, 0))[0]
+            return isinstance(limit, (int, float)) and have >= limit - KEEP_LIMIT_SLACK
+
         state_store = ctx.get("state")
         slow = {site_key: dict(posted) for site_key, posted in  # a copy, so State.set sees what changed
                 ((state_store.get("slowed_posted") if state_store else getattr(self, "slowed_posted", None)) or {}).items()}
@@ -2596,6 +2603,15 @@ class IndustryWatcher(Watcher):
             held, site_id = site.get("heldBy"), site.get("siteId")
             if not held or held in IGNORED_STALL_REASONS:
                 continue
+            if held == "staffing" and at_keep_limit(site):
+                # A refinery or factory whose own good has reached our keep limit stops, as a full mine does, but
+                # the game calls it "staffing", not "keepLimit", when the crew is a little short (build HML7qYMP).
+                if site_id not in self.keep_full_logged:
+                    log(f"[Stall] {site.get('kind')} ({site.get('goodId')}) at {site.get('placeId')}: its good is at "
+                        f"our keep limit (game says {held}); not posted")
+                self.keep_full_logged.add(site_id)
+                continue
+            self.keep_full_logged.discard(site_id)
             state = "slowed" if (site.get("outputPerDay") or 0) > 0 else "stopped"
             reason = f"{held}/{state}"  # slowed, then stopped, is a new stall
             old_reason, seen = self.stalls.get(site_id, (None, 0))
