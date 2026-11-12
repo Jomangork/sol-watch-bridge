@@ -4,6 +4,13 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.11 (Nov 12, 2026)
+
+For the game's Nov 12 update (pirates take captives, battles of many sides).
+
+- **Escape capsules and captives.** The API lists our crews' escape capsules still out, and crews we hold, under `/craft` `capsules`. The bridge didn't read it; now each new one is posted (🆘), and again when it's no longer listed (picked up, handed over or lost). Pirates now take the crew of the wrecks they tow captive, so a crew left in capsules matters more. No capsule has been seen in the API yet, so the post lists its fields as the game gives them, and the first one is saved to `captures/` to word it better later.
+- **Lite mode:** a battle begun gets ⚔️ and an attack beaten off 🛡️, not the 📰 of an unknown kind.
+
 ## 1.07.10 (Nov 12, 2026)
 
 - **A full plant is no longer posted as stopped.** A refinery or factory stops once its own good reaches your keep limit, as a mine does. The game reports a full mine as held by its keep limit, but a refinery or factory as held by "staffing" whenever the crew is even slightly short. The bridge then posted "crew is short, but that only slows production, so something else is missing too", for example for fuel and catalyst plants sitting at their limit. These are now only logged.

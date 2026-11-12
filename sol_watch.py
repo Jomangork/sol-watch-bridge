@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.10"
+VERSION = "1.07.11"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -280,7 +280,7 @@ LITE_NEWS_ICONS = {
     "station": "🛰️", "outpost": "📍", "range_expansion": "🚀", "ueg_built": "🏗️", "ueg_navy": "⚓",
     "ueg_elevator": "🏛️", "badge_first": "🏅", "project_honor": "🏆", "market_event": "📈", "salvage": "♻️",
     "abandoned": "🛸", "launch_failure": "💥", "outpost_surrendered": "🏳️", "return": "🔙", "terrorist_hunt": "⚔️",
-    "frontier": "🏺"}
+    "frontier": "🏺", "battle_begun": "⚔️", "attack_repelled": "🛡️"}
 # Kinds only counted in the digest: frequent, or posted from elsewhere (crew lost comes from the memorial).
 # Hazard items that hit one craft count here too; flare forecasts are posted.
 LITE_NEWS_NOISE = {  # kind: (one, several)
@@ -1481,6 +1481,27 @@ class CraftWatcher(Watcher):
         self.queued = {mission_id: bool(m.get("rangeQueued")) for mission_id, m in missions.items()}
         self.safe_mode = safe_mode
         self.newest_loss = max(self.newest_loss if not first else 0, newest_id(losses))
+        lines += self.capsules(data.get("capsules") or [])
+        return lines
+
+    def capsules(self, items):
+        """/craft capsules[]: "Our crews' escape capsules still out, and crews we hold" (spec). Never sampled yet:
+        the first is saved to captures/ and every one is posted in plain words, a new one and one no longer listed.
+        Remembered in state.json, so a restart doesn't post them again, and one already out at a first start is."""
+        ctx, clock = self.ctx, self.ctx["clock"]
+        state = ctx["state"]
+        known = state.get("capsules_seen") or {}
+        now = {capsule_key(item): item for item in items if isinstance(item, dict)}
+        lines = []
+        for key in now.keys() - known.keys():
+            if "capsules" not in ctx["captured"]:
+                ctx["captured"].add("capsules")
+                capture("craft-capsules", now[key])
+            lines.append(f"🆘 **[ESCAPE CAPSULES / CAPTIVES]** {clock.stamp()} {capsule_text(ctx, now[key])}")
+        for key in known.keys() - now.keys():
+            lines.append(f"🛟 {clock.stamp()} No longer listed (picked up, handed over or lost): "
+                         f"{known[key].get('text', key)}")
+        state.set("capsules_seen", {key: {"text": capsule_text(ctx, item)} for key, item in now.items()})
         return lines
 
 
@@ -2835,6 +2856,35 @@ def describe(item):
     parts = [f"{k}: {v:,.1f}" if isinstance(v, float) else f"{k}: {v}"
              for k, v in item.items() if isinstance(v, (int, float, str)) and not isinstance(v, bool)]
     return " | ".join(parts)[:300] or json.dumps(item, ensure_ascii=False)[:200]
+
+
+def capsule_key(item):
+    """A capsule group's id, or (no id field) its fixed fields: counts and days change as it drifts."""
+    for field in ("id", "capsuleId", "groupId", "lossId", "battleId"):
+        if item.get(field) is not None:
+            return f"{field}:{item[field]}"
+    fixed = {k: v for k, v in item.items() if isinstance(v, str) or (isinstance(v, int) and "id" in k.lower())}
+    return hashlib.sha1(json.dumps(fixed, sort_keys=True).encode()).hexdigest()
+
+
+def capsule_text(ctx, item):
+    """Every plain field of a capsule item, with places, companies and game days in words."""
+    parts = []
+    for key, value in item.items():
+        lowered = key.lower()
+        if isinstance(value, bool) or not isinstance(value, (int, float, str)):
+            continue
+        if isinstance(value, str) and ("place" in lowered or "where" in lowered
+                                       or lowered in ("from", "to", "at", "fromid", "toid", "atid")):
+            value = place_name(ctx, value)
+        elif isinstance(value, int) and any(w in lowered for w in ("company", "captor", "owner", "holder")):
+            value = ctx["company_names"].get(value, value)
+        elif isinstance(value, (int, float)) and "day" in lowered:
+            value = ctx["clock"].stamp(game_day=value)
+        elif isinstance(value, float):
+            value = f"{value:,.1f}"
+        parts.append(f"{key}: {value}")
+    return " | ".join(parts)[:400] or json.dumps(item, ensure_ascii=False)[:200]
 
 
 def capture(name, item):
