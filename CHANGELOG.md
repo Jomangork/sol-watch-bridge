@@ -4,6 +4,11 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.14 (Nov 14, 2026)
+
+- **Our fleets' flights** (new setting, off by default: `[alerts] fleet_move_posts = yes`). When one of our fleets leaves, the bridge posts where from and to, what's in it, and when it lands with a live countdown (🧭). A reminder comes `fleet_arrival_warning_minutes` (30) before it lands (🔔), and a post when it has landed (⚓). A divert, a new destination or landing time, is posted (↪️) and moves the reminder. A fleet called off or lost on the way isn't posted as landed. Flights that leave or land while the bridge is stopped are still posted, and none twice.
+- **The game time moves after the news in the rest of the posts.** 1.07.13 missed posts with a **[LABEL]** before the time, such as alliance jobs, ship orders, hazard forecasts and battles of ours. They now follow the same rule.
+
 ## 1.07.13 (Nov 14, 2026)
 
 - **The game time comes after the news, not before it.** Every post started with its emoji and then the game time, so the time was the first thing read. The time now follows the main information: after the headline when the details come after a " | ", after a headline that ends in a colon (a list below it), and otherwise at the end of the line. For example: "⏳ **Steel at Some Station runs out in 8h** (12h warning) · `13 Dec 2032, 06:33 PM` | production input | 3 left". A trade offer has it right after who it's from, and an empty research queue right after its headline. Dates further along a post (a deadline, an expiry, a liftoff) stay where they were. This applies to both modes, and to chat.

@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.13"
+VERSION = "1.07.14"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -115,6 +115,10 @@ INTERVAL_DIPLOMACY = 60   # deals and agreements (offers expire, so check often)
 
 # Warn this many real minutes before an offer waiting on us expires.
 DEAL_EXPIRY_WARNING_MINUTES = 60
+# Our own fleets' flights: posted when one leaves (with when it lands), shortly before it lands, and when it has
+# landed. Not urgent, so off unless settings.ini turns it on ([alerts] fleet_move_posts = yes).
+FLEET_MOVE_POSTS = False
+FLEET_ARRIVAL_WARNING_MINUTES = 30
 INTERVAL_RECORDS = 600    # badges and firsts
 INTERVAL_NEWS = 300       # Solar News: pirate raids and thefts, salvages of our derelicts
 INTERVAL_PAD_GOALS = 300  # spaceports asking every company for a new launch pad's materials (/ueg)
@@ -629,6 +633,8 @@ SETTINGS_SPEC = (
     ("alerts", "daily_status_hour", "DAILY_STATUS_HOUR", "hour", None),  # older, one whole hour
     ("alerts", "game_update_posts", "GAME_UPDATE_POSTS", "bool", None),
     ("alerts", "new_place_posts", "NEW_PLACE_POSTS", "bool", None),
+    ("alerts", "fleet_move_posts", "FLEET_MOVE_POSTS", "bool", None),
+    ("alerts", "fleet_arrival_warning_minutes", "FLEET_ARRIVAL_WARNING_MINUTES", "int", (0, 1440)),
     ("incoming", "ignore_earth_moon", "INCOMING_IGNORE_EARTH_MOON", "bool", None),
     ("incoming", "ignore_places", "INCOMING_IGNORE_PLACES", "set", None),
     ("incoming", "ignore_companies", "INCOMING_IGNORE_COMPANIES", "set", None),
@@ -1090,11 +1096,11 @@ class Discord:
             self.send(webhook_url, chunk[:2000])
 
 
-LEADING_STAMP_RE = re.compile(r"^((?:[^\w\s`*\[(]\S*\s+){1,3})(`[^`\n]*\d{4}[^`\n]*`(?: · [^\n<]*<t:\d+:t> \(<t:\d+:R>\))?) (?=\S)")
+LEADING_STAMP_RE = re.compile(r"^((?:[^\w\s`*\[(]\S*\s+){1,3}(?:\*\*\[[^\]\n]*\]\*\* )?)(`[^`\n]*\d{4}[^`\n]*`(?: · [^\n<]*<t:\d+:t> \(<t:\d+:R>\))?) (?=\S)")
 
 
 def stamp_after_headline(text):
-    """Watchers write a post's game time right after its emoji; it's moved after the post's main information, on
+    """Watchers write a post's game time right after its emoji (or its **[LABEL]**); it's moved after the post's main information, on
     each line that starts that way: before the first " | " (outside [brackets] and **bold**) when there is one,
     after a headline ending in a colon ("**5 sites at Tros stopped:** `…`", its list below), else at the end."""
     out = []
@@ -3104,6 +3110,56 @@ class FleetsWatcher(Watcher):
                     else:
                         lines.append(f"🏳️ {clock.stamp()} {ended.capitalize()}: {summarise(ctx, previous[key])}")
             self.seen[list_name] = items
+        if FLEET_MOVE_POSTS:
+            lines += self.flights(data.get("fleetMoves") or [], first)
+        return lines
+
+    def flights(self, moves, first):
+        """Our fleets in flight (fleetMoves: {id, companyId, fromId, toId, units, departDay, arriveDay}). One that
+        leaves is posted with when it lands, a reminder fires FLEET_ARRIVAL_WARNING_MINUTES before, and one gone
+        from the list once its time has come has landed. A new destination or time is a divert. Saved in state.json,
+        so a flight that left or landed while the bridge was stopped is still posted, and none twice."""
+        ctx, clock, state, reminders = self.ctx, self.ctx["clock"], self.ctx["state"], self.ctx["reminders"]
+        ours = {str(m["id"]): {"from": m.get("fromId"), "to": m.get("toId"), "units": m.get("units") or {},
+                               "arrive": m.get("arriveDay")}
+                for m in moves if isinstance(m, dict) and m.get("id") is not None
+                and m.get("companyId") in (None, ctx.get("company_id"))}
+        saved = state.get("fleet_flights")
+        lines = []
+        names = ctx.get("unit_names")
+        for key, f in ours.items():
+            what, to = units_text(f["units"], names), place_name(ctx, f["to"])
+            arrive = f"{clock.stamp(game_day=f['arrive'])}" if isinstance(f["arrive"], (int, float)) else "at an unknown time"
+            old = (saved or {}).get(key)
+            if saved is not None and old is None:
+                lines.append(f"🧭 {clock.stamp()} **Our fleet left {place_name(ctx, f['from'])} for {to}:** {what} | "
+                             f"Lands {arrive}")
+            elif old and (old.get("to") != f["to"] or (isinstance(old.get("arrive"), (int, float))
+                          and isinstance(f["arrive"], (int, float)) and abs(old["arrive"] - f["arrive"]) > 0.05)):
+                lines.append(f"↪️ {clock.stamp()} **Our fleet bound for {place_name(ctx, old.get('to'))} now heads for "
+                             f"{to}:** {what} | Lands {arrive}")
+            for stale in [k for k in reminders.pending if k.startswith(f"fleet:{key}:") and k != f"fleet:{key}:{f['arrive']}"]:
+                reminders.cancel(stale)
+            if FLEET_ARRIVAL_WARNING_MINUTES and isinstance(f["arrive"], (int, float)):
+                due = clock.real_ms_for(f["arrive"])
+                if due - time.time() * 1000 > FLEET_ARRIVAL_WARNING_MINUTES * 60_000:
+                    reminders.set(f"fleet:{key}:{f['arrive']}", due - FLEET_ARRIVAL_WARNING_MINUTES * 60_000,
+                                  self.webhook, self.header,
+                                  lambda to=to, what=what, arrive=f["arrive"]: (
+                                      f"🔔 {clock.stamp()} **Our fleet lands at {to} in {FLEET_ARRIVAL_WARNING_MINUTES} "
+                                      f"min:** {what} | Lands {clock.stamp(game_day=arrive)}"))
+        now = clock.now_game_day()
+        for key, f in (saved or {}).items():
+            if key in ours:
+                continue
+            for stale in [k for k in reminders.pending if k.startswith(f"fleet:{key}:")]:
+                reminders.cancel(stale)
+            what, to = units_text(f.get("units"), names), place_name(ctx, f.get("to"))
+            if isinstance(f.get("arrive"), (int, float)) and f["arrive"] <= now + 0.05:
+                lines.append(f"⚓ {clock.stamp(game_day=f['arrive'])} **Our fleet landed at {to}:** {what}")
+            else:
+                log(f"[Fleets] Our fleet bound for {to} ({what}) stopped flying before it was due: called off or lost.")
+        state.set("fleet_flights", ours)
         return lines
 
 
