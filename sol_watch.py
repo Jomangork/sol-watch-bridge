@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.12"
+VERSION = "1.07.13"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -1072,7 +1072,7 @@ class Discord:
         return True
 
     def post(self, webhook_url, header, lines):
-        lines = merge_repeats(lines)
+        lines = merge_repeats([stamp_after_headline(line) for line in lines])
         for line in lines:
             log(line)
         if not self.enabled or not lines:
@@ -1088,6 +1088,31 @@ class Discord:
         chunks.append(current)
         for chunk in chunks:
             self.send(webhook_url, chunk[:2000])
+
+
+LEADING_STAMP_RE = re.compile(r"^((?:[^\w\s`*\[(]\S*\s+){1,3})(`[^`\n]*\d{4}[^`\n]*`(?: · [^\n<]*<t:\d+:t> \(<t:\d+:R>\))?) (?=\S)")
+
+
+def stamp_after_headline(text):
+    """Watchers write a post's game time right after its emoji; it's moved after the post's main information, on
+    each line that starts that way: before the first " | " (outside [brackets] and **bold**) when there is one,
+    after a headline ending in a colon ("**5 sites at Tros stopped:** `…`", its list below), else at the end."""
+    out = []
+    for line in text.split("\n"):
+        m = LEADING_STAMP_RE.match(line)
+        if m:
+            icons, stamp, rest = m.group(1), m.group(2), line[m.end():]
+            split = next((i.start() for i in re.finditer(r" \| ", rest)
+                          if rest.count("[", 0, i.start()) == rest.count("]", 0, i.start())
+                          and rest.count("**", 0, i.start()) % 2 == 0 and rest.count("`", 0, i.start()) % 2 == 0), None)
+            if split is not None:
+                line = f"{icons}{rest[:split]} · {stamp}{rest[split:]}"
+            elif rest.rstrip().endswith((":", ":**")):
+                line = f"{icons}{rest.rstrip()} {stamp}"
+            else:
+                line = f"{icons}{rest.rstrip()} · {stamp}"
+        out.append(line)
+    return "\n".join(out)
 
 
 def merge_repeats(lines):
@@ -2398,7 +2423,7 @@ class CompanyWatcher(Watcher):
             job = ctx.get("research_job")
             current = f" The lab is on **{ctx['tech_names'].get(job['techId'], job['techId'])}** until " \
                       f"{clock.stamp(game_day=job.get('completeDay'))} - queue more before then." if job else ""
-            lines.append(f"📭 {clock.stamp()} **The research queue is empty.**{current}")
+            lines.append(f"📭 **The research queue is empty.** {clock.stamp()}{current}")
         self.research_queue = research_queue
         ctx["research_queue"] = research_queue  # the research watcher waits for the next one to start
 
@@ -3407,7 +3432,7 @@ class DiplomacyWatcher(Watcher):
                        if deal.get("expiresDay") else "")
             if old is None:
                 if status == "open" and ours:
-                    lines.append(f"📨 {clock.stamp()} **Offer from {who}** (deal #{deal_id}): {self.describe_deal(deal)}. "
+                    lines.append(f"📨 **Offer from {who}** (deal #{deal_id}) · {clock.stamp()}: {self.describe_deal(deal)}. "
                                  f"**Our move.**{expires}")
                     lines += self.shortfalls(deal)
                 elif status == "open":

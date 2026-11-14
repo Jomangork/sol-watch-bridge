@@ -4,6 +4,10 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.13 (Nov 14, 2026)
+
+- **The game time comes after the news, not before it.** Every post started with its emoji and then the game time, so the time was the first thing read. The time now follows the main information: after the headline when the details come after a " | ", after a headline that ends in a colon (a list below it), and otherwise at the end of the line. For example: "⏳ **Steel at Some Station runs out in 8h** (12h warning) · `13 Dec 2032, 06:33 PM` | production input | 3 left". A trade offer has it right after who it's from, and an empty research queue right after its headline. Dates further along a post (a deadline, an expiry, a liftoff) stay where they were. This applies to both modes, and to chat.
+
 ## 1.07.12 (Nov 12, 2026)
 
 From the first siege seen in the API (an alliance navy besieging a faction's outpost).
