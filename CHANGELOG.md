@@ -4,6 +4,15 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.12 (Nov 12, 2026)
+
+From the first siege seen in the API (an alliance navy besieging a faction's outpost).
+
+- **A siege is posted once.** A siege has no id, and its days left count down, so each game day it looked like a new siege, posted again with "Siege ended" for the old one. It's now one siege until it really ends.
+- **Sieges are described.** They said only "siteId: Some Outpost". Now, for example: "**[XX] Navy (our alliance navy)** laid siege to the UBN (Unified Belter Nation)'s outpost at **Some Outpost** on Callisto | Falls in about 18 game days (18h) unless it is broken", and when it ends, whether it most likely fell.
+- **Our alliance's navy is a friend.** Its battles and sieges were posted as "elsewhere". They now go with ours and our allies', and it's named "(our alliance navy)".
+- **Lite mode:** siege news gets 🏰, not the 📰 of an unknown kind.
+
 ## 1.07.11 (Nov 12, 2026)
 
 For the game's Nov 12 update (pirates take captives, battles of many sides).

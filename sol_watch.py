@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.11"
+VERSION = "1.07.12"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -280,7 +280,8 @@ LITE_NEWS_ICONS = {
     "station": "🛰️", "outpost": "📍", "range_expansion": "🚀", "ueg_built": "🏗️", "ueg_navy": "⚓",
     "ueg_elevator": "🏛️", "badge_first": "🏅", "project_honor": "🏆", "market_event": "📈", "salvage": "♻️",
     "abandoned": "🛸", "launch_failure": "💥", "outpost_surrendered": "🏳️", "return": "🔙", "terrorist_hunt": "⚔️",
-    "frontier": "🏺", "battle_begun": "⚔️", "attack_repelled": "🛡️"}
+    "frontier": "🏺", "battle_begun": "⚔️", "attack_repelled": "🛡️",
+    "siege_laid": "🏰"}
 # Kinds only counted in the digest: frequent, or posted from elsewhere (crew lost comes from the memorial).
 # Hazard items that hit one craft count here too; flare forecasts are posted.
 LITE_NEWS_NOISE = {  # kind: (one, several)
@@ -2773,6 +2774,8 @@ def side_text(ctx, company_id):
     if company_id == ctx.get("company_id"):
         return "us"
     name = ctx.get("company_names", {}).get(company_id, f"company #{company_id}")
+    if company_id is not None and company_id == ctx.get("navy_id"):
+        return f"{name} (our alliance navy)"
     if company_id in ctx.get("ally_ids", set()):
         return f"{name} (ally)"
     return f"{name} (pirates)" if COMPANY_KINDS.get(company_id) == "pirate" else name
@@ -2812,6 +2815,29 @@ def wreck_text(ctx, wreck):
     until = f" | Drifts there until {clock.stamp(game_day=wreck['expiresDay'])}" \
         if isinstance(wreck.get("expiresDay"), (int, float)) else ""
     return f"{side_text(ctx, wreck.get('ownerId'))}'s {unit}{name} wrecked in {space_place(ctx, wreck.get('placeId'))}{until}"
+
+
+def siege_text(ctx, siege, ended=False):
+    """fleets ourSieges[] / fleets/map sieges[] (first seen 2026-11-12): {siteId, attackerId, defenderId (0 for a
+    faction's outpost), defenderFactionId, startedDay, daysLeft (ourSieges only: the two sides see when it falls)}."""
+    attacker = side_text(ctx, siege.get("attackerId"))
+    faction = siege.get("defenderFactionId")
+    if faction and not siege.get("defenderId"):
+        defender = f"the {FACTION_NAMES.get(faction, faction)}"
+    else:
+        defender = side_text(ctx, siege.get("defenderId"))
+    defender = "our" if defender == "us" else f"{defender}'s"
+    head = f"**{attacker}** {'laid' if not ended else 'ended its'} siege {'to' if not ended else 'of'} {defender} " \
+           f"outpost at {site_text(ctx, siege.get('siteId'))}"
+    left = siege.get("daysLeft")
+    if ended:
+        likely = "it most likely fell" if isinstance(left, (int, float)) and left <= 1 else \
+            "it fell, or was broken or lifted"
+        return f"{head}: {likely}"
+    if isinstance(left, (int, float)):
+        hours = ctx["clock"].game_days_to_hours(left)
+        return f"{head} | Falls in about {left:g} game days ({hours_text(hours)}) unless it is broken"
+    return head
 
 
 def mentions_company(item, company_ids):
@@ -2899,6 +2925,10 @@ def capture(name, item):
 def item_key(item):
     if isinstance(item, dict) and item.get("id") is not None:
         return str(item["id"])
+    if isinstance(item, dict) and item.get("siteId") is not None and item.get("startedDay") is not None:
+        # A siege has no id, and its daysLeft counts down: keyed by all its fields, it looked new (and the old one
+        # ended) every game day (1.07.11).
+        return f"siege:{item['siteId']}:{item.get('attackerId')}:{item['startedDay']}"
     return hashlib.sha1(json.dumps(item, sort_keys=True).encode()).hexdigest()
 
 
@@ -2939,7 +2969,7 @@ class FleetMapWatcher(Watcher):
 
     def update(self, data, first):
         clock, ctx = self.ctx["clock"], self.ctx
-        friends = {ctx["company_id"]} | ctx.get("ally_ids", set())
+        friends = {ctx["company_id"]} | ctx.get("ally_ids", set()) | ({ctx["navy_id"]} if ctx.get("navy_id") else set())
         lines, elsewhere = [], []
 
         warships = {u for u, role in ctx["unit_roles"].items() if role in INCOMING_THREAT_ROLES}
@@ -2991,6 +3021,8 @@ class FleetMapWatcher(Watcher):
                     text, when = battle_text(ctx, item, data.get("wrecks") or []), item.get("day")
                 elif list_name == "wrecks":
                     text, when = wreck_text(ctx, item), item.get("wreckedDay")
+                elif list_name == "sieges":
+                    text, when = siege_text(ctx, item), item.get("startedDay")
                 else:
                     text, when = summarise(ctx, item), None
                 stamp = clock.stamp(game_day=when) if isinstance(when, (int, float)) else clock.stamp()
@@ -3020,6 +3052,7 @@ class FleetsWatcher(Watcher):
     def update(self, data, first):
         clock, ctx = self.ctx["clock"], self.ctx
         ctx["fleet_places"] = {f.get("placeId") for f in data.get("fleets", [])}
+        ctx["navy_id"] = (data.get("navy") or {}).get("companyId")  # our alliance's navy: a friend in battles
         # Our warships and other fleet ships by kind, parked or moving, for the theft check (NewsWatcher).
         units = {}
         for f in data.get("fleets", []) + data.get("fleetMoves", []):
@@ -3035,10 +3068,16 @@ class FleetsWatcher(Watcher):
                 if list_name not in ctx["captured"]:
                     ctx["captured"].add(list_name)
                     capture(f"fleets-{list_name}", items[key])
-                lines.append(f"⚔️ **[{label.upper()}]** {clock.stamp()} {summarise(ctx, items[key])}")
+                if list_name == "ourSieges":
+                    lines.append(f"⚔️ **[{label.upper()}]** {clock.stamp()} {siege_text(ctx, items[key])}")
+                else:
+                    lines.append(f"⚔️ **[{label.upper()}]** {clock.stamp()} {summarise(ctx, items[key])}")
             if not first:
                 for key in previous.keys() - items.keys():
-                    lines.append(f"🏳️ {clock.stamp()} {ended.capitalize()}: {summarise(ctx, previous[key])}")
+                    if list_name == "ourSieges":
+                        lines.append(f"🏳️ {clock.stamp()} {siege_text(ctx, previous[key], ended=True)}")
+                    else:
+                        lines.append(f"🏳️ {clock.stamp()} {ended.capitalize()}: {summarise(ctx, previous[key])}")
             self.seen[list_name] = items
         return lines
 
