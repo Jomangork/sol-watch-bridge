@@ -4,6 +4,10 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.15 (Nov 14, 2026)
+
+- **Our space elevator bookings** (new setting, off by default: `[alerts] elevator_trip_posts = yes`), like our fleets' flights. A new booking is posted with what it carries, which way and on which elevator, when its climber climbs if it's waiting in line, and when it arrives with a live countdown (🛗). A reminder comes `fleet_arrival_warning_minutes` (30) before it arrives (🔔), and a post when it has arrived. A booking canceled before it arrives is only logged. Ring freight between two elevators and crew bookings are named as such.
+
 ## 1.07.14 (Nov 14, 2026)
 
 - **Our fleets' flights** (new setting, off by default: `[alerts] fleet_move_posts = yes`). When one of our fleets leaves, the bridge posts where from and to, what's in it, and when it lands with a live countdown (🧭). A reminder comes `fleet_arrival_warning_minutes` (30) before it lands (🔔), and a post when it has landed (⚓). A divert, a new destination or landing time, is posted (↪️) and moves the reminder. A fleet called off or lost on the way isn't posted as landed. Flights that leave or land while the bridge is stopped are still posted, and none twice.

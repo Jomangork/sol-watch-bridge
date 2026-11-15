@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.14"
+VERSION = "1.07.15"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -119,6 +119,10 @@ DEAL_EXPIRY_WARNING_MINUTES = 60
 # landed. Not urgent, so off unless settings.ini turns it on ([alerts] fleet_move_posts = yes).
 FLEET_MOVE_POSTS = False
 FLEET_ARRIVAL_WARNING_MINUTES = 30
+# Our space elevator bookings, the same way: booked (when it climbs and arrives), a reminder before it arrives
+# (FLEET_ARRIVAL_WARNING_MINUTES), and arrived. Off unless settings.ini turns it on ([alerts] elevator_trip_posts).
+ELEVATOR_TRIP_POSTS = False
+ELEVATOR_NAMES = {"elevator": "Artsutanov Elevator"}  # the first one's id; the others' ids name them
 INTERVAL_RECORDS = 600    # badges and firsts
 INTERVAL_NEWS = 300       # Solar News: pirate raids and thefts, salvages of our derelicts
 INTERVAL_PAD_GOALS = 300  # spaceports asking every company for a new launch pad's materials (/ueg)
@@ -634,6 +638,7 @@ SETTINGS_SPEC = (
     ("alerts", "game_update_posts", "GAME_UPDATE_POSTS", "bool", None),
     ("alerts", "new_place_posts", "NEW_PLACE_POSTS", "bool", None),
     ("alerts", "fleet_move_posts", "FLEET_MOVE_POSTS", "bool", None),
+    ("alerts", "elevator_trip_posts", "ELEVATOR_TRIP_POSTS", "bool", None),
     ("alerts", "fleet_arrival_warning_minutes", "FLEET_ARRIVAL_WARNING_MINUTES", "int", (0, 1440)),
     ("incoming", "ignore_earth_moon", "INCOMING_IGNORE_EARTH_MOON", "bool", None),
     ("incoming", "ignore_places", "INCOMING_IGNORE_PLACES", "set", None),
@@ -2257,6 +2262,29 @@ def first_upper(text):
     return text[:1].upper() + text[1:]
 
 
+def elevator_name(elevator_id):
+    """'elevator' -> 'Artsutanov Elevator', 'tsiolkovsky_elevator' -> 'Tsiolkovsky Elevator'."""
+    return ELEVATOR_NAMES.get(elevator_id) or str(elevator_id or "the elevator").replace("_", " ").title()
+
+
+def elevator_trip_text(ctx, trip):
+    """'50× Rocket engines (100 t) up Artsutanov Elevator to LEO station'; ring freight goes 'from X to Y'."""
+    people = next((trip[k] for k in ("crew", "people", "passengers") if isinstance(trip.get(k), (int, float))), None)
+    good = (ctx.get("good_names") or {}).get(trip.get("goodId")) or tidy_id(trip.get("goodId") or "cargo")
+    if people:
+        what = f"{people:g} crew"
+    elif isinstance(trip.get("qty"), (int, float)):
+        what = f"{trip['qty']:g}× {good}" + (f" ({trip['tonnes']:g} t)" if isinstance(trip.get("tonnes"), (int, float)) else "")
+    else:
+        what = f"{trip['tonnes']:g} t of {good}" if isinstance(trip.get("tonnes"), (int, float)) else good
+    elevator = elevator_name(trip.get("elevatorId"))
+    if trip.get("toElevatorId"):
+        return f"{what} from {elevator} to {elevator_name(trip['toElevatorId'])} by the ring"
+    station = next((trip[k] for k in ("stationId", "toStationId", "fromStationId", "placeId") if trip.get(k)), None)
+    where = f" {'to' if trip.get('direction') == 'up' else 'from'} {place_name(ctx, station)}" if station else ""
+    return f"{what} {trip.get('direction') or 'on'} {elevator}{where}"
+
+
 def place_name(ctx, place_id):
     """A surface place, region or station ('pallas/a' -> 'Pallas north 179°E'); a body name if it's a body."""
     if place_id is None:
@@ -2749,6 +2777,8 @@ class IndustryWatcher(Watcher):
         self.stalls = stalls
         self.countdown.prune()
         lines += self.blocked_vehicles(industry, first)
+        if ELEVATOR_TRIP_POSTS:
+            lines += self.elevator_trips(industry.get("elevatorTrips") or [])
 
         if first:
             summary = f"🏭 **[INDUSTRY]** {len(stalls)} sites held up (inputs, crew or upkeep)"
@@ -2756,6 +2786,48 @@ class IndustryWatcher(Watcher):
                                     if soon else " | nothing running out within 72h"))
         return lines
 
+
+    def elevator_trips(self, trips):
+        """Our space elevator bookings ({id, direction, elevatorId, toElevatorId, tonnes, bookedDay, departDay,
+        arriveDay, goodId, qty, fee}; a crew booking carries people). A new one is posted with when it climbs and
+        arrives, a reminder fires FLEET_ARRIVAL_WARNING_MINUTES before it arrives, and one gone from the list once
+        its time has come has arrived; one gone before it climbed was canceled, and is only logged. Saved in
+        state.json, so none is posted twice or missed over a restart."""
+        ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
+        reminders = ctx.get("reminders")
+        ours = {str(t["id"]): {"what": elevator_trip_text(ctx, t), "depart": t.get("departDay"), "arrive": t.get("arriveDay")}
+                for t in trips if isinstance(t, dict) and t.get("id") is not None}
+        saved = state.get("elevator_trips")
+        lines, now = [], clock.now_game_day()
+        for key, t in ours.items():
+            arrive = clock.stamp(game_day=t["arrive"]) if isinstance(t["arrive"], (int, float)) else "at an unknown time"
+            if saved is not None and key not in saved:
+                climbs = (f" | Climbs {clock.stamp(game_day=t['depart'])}"
+                          if isinstance(t["depart"], (int, float)) and t["depart"] > now + 0.01 else "")
+                lines.append(f"🛗 {clock.stamp()} **Elevator booking: {t['what']}**{climbs} | Arrives {arrive}")
+            if reminders is None:
+                continue
+            for stale in [k for k in reminders.pending if k.startswith(f"elevator:{key}:") and k != f"elevator:{key}:{t['arrive']}"]:
+                reminders.cancel(stale)
+            if FLEET_ARRIVAL_WARNING_MINUTES and isinstance(t["arrive"], (int, float)):
+                due = clock.real_ms_for(t["arrive"])
+                if due - time.time() * 1000 > FLEET_ARRIVAL_WARNING_MINUTES * 60_000:
+                    reminders.set(f"elevator:{key}:{t['arrive']}", due - FLEET_ARRIVAL_WARNING_MINUTES * 60_000,
+                                  self.webhook, self.header,
+                                  lambda what=t["what"], arrive=t["arrive"]: (
+                                      f"🔔 {clock.stamp()} **Elevator cargo arrives in {FLEET_ARRIVAL_WARNING_MINUTES} min:** "
+                                      f"{what} | Arrives {clock.stamp(game_day=arrive)}"))
+        for key, t in (saved or {}).items():
+            if key in ours:
+                continue
+            for stale in [k for k in (reminders.pending if reminders else {}) if k.startswith(f"elevator:{key}:")]:
+                reminders.cancel(stale)
+            if isinstance(t.get("arrive"), (int, float)) and t["arrive"] <= now + 0.05:
+                lines.append(f"🛗 {clock.stamp(game_day=t['arrive'])} **Elevator cargo arrived:** {t['what']}")
+            else:
+                log(f"[Elevator] Booking gone before it arrived (canceled?): {t['what']}")
+        state.set("elevator_trips", ours)
+        return lines
 
     def blocked_vehicles(self, industry, first):
         """Our freighters, tugs and trucks the game has stopped on their route ("needs 105 kg of fusion fuel more for
