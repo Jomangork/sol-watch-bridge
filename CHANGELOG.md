@@ -4,6 +4,12 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.09.00 (Nov 15, 2026)
+
+- **One Discord channel.** The bridge now posts everything to one webhook, `WEBHOOK_BRIDGE`, instead of three. Nothing to edit when upgrading: without `WEBHOOK_BRIDGE`, it posts to `WEBHOOK_CORP` (else `WEBHOOK_GENERAL`), and only logs that the other webhooks are no longer used. Lite mode is unchanged (`WEBHOOK_LITE`, else `WEBHOOK_GENERAL`).
+- **Global chat is off by default** in the full bridge, so the one channel stays for alerts: `global_chat_posts = yes` under `[alerts]` in `settings.ini` turns it back on. Alliance chat is still relayed, and lite mode still relays global chat to its own channel.
+- The alert labels from 1.08.00 are unchanged.
+
 ## 1.08.00 (Nov 15, 2026)
 
 - **Alert labels, for the SOL-Watch Pocket phone app.** Every line the bridge posts is now an `Alert`: still a plain string, and Discord gets exactly the same text, but it also carries a `kind` (one of the ids in the new `ALERT_KINDS` list, each with a description and default priority), a `priority` (`urgent`, `normal`, `info` or `chat`), a plain-text `title`, the event's real time `game_ms` and an optional `key` for an alert posted again about the same thing. A program running the bridge in-process can sort and filter alerts without reading emoji. `ALERT_FIELDS = 1` says the bridge supports this. See "Alert labels" in the README.

@@ -17,9 +17,9 @@ Your adjustable settings go in settings.ini next to this script (optional; copy 
 Secrets come from a .env file next to this script (or one folder up), or from
 real environment variables, which win:
     SOL_BRIDGE_API_KEY   SOL API key (SOL_API_KEY is accepted too)
-    WEBHOOK_CORP         Discord webhook for research, fleet and mining
-    WEBHOOK_GENERAL      Discord webhook for contracts, defense and global chat
-    WEBHOOK_ALLIANCE     Discord webhook for alliance chat
+    WEBHOOK_BRIDGE       the Discord webhook everything is posted to (since 1.09.00; before, three channels).
+                         Unset: WEBHOOK_CORP, else WEBHOOK_GENERAL, so an older .env keeps working.
+    WEBHOOK_LITE         lite mode's one channel (else WEBHOOK_GENERAL)
     IRL_TIMEZONE         optional, e.g. Europe/London; default is the machine's zone
 
 Usage:
@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.08.00"
+VERSION = "1.09.00"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -118,6 +118,10 @@ DEAL_EXPIRY_WARNING_MINUTES = 60
 # Our own fleets' flights: posted when one leaves (with when it lands), shortly before it lands, and when it has
 # landed. Not urgent, so off unless settings.ini turns it on ([alerts] fleet_move_posts = yes).
 FLEET_MOVE_POSTS = False
+# Global chat relayed by the full bridge (1.09.00: everything posts to one channel, and lite mode already relays
+# global chat to its own). Not urgent, so off unless settings.ini turns it on ([alerts] global_chat_posts = yes).
+# Alliance chat is relayed either way (when the key may read Alliance chat).
+GLOBAL_CHAT_POSTS = False
 FLEET_ARRIVAL_WARNING_MINUTES = 30
 # Our space elevator bookings, the same way: booked (when it climbs and arrives), a reminder before it arrives
 # (FLEET_ARRIVAL_WARNING_MINUTES), and arrived. Off unless settings.ini turns it on ([alerts] elevator_trip_posts).
@@ -153,7 +157,7 @@ GAME_BUNDLE = re.compile(r"assets/[\w.-]+\.(?:js|css)")
 SPEC_RECHECK_AFTER_UPDATE_SECONDS = 120
 
 # Bridge updates: at startup and once a day, read the VERSION line of sol_watch.py on GitHub (one small
-# request to GitHub, no key or game data sent) and post to the Corp channel while a newer version exists.
+# request to GitHub, no key or game data sent) and post to the bridge's channel while a newer version exists.
 # False turns it off. A fork can point BRIDGE_SOURCE_URL and BRIDGE_PROJECT_URL at its own project.
 UPDATE_CHECK = True
 INTERVAL_UPDATE_CHECK = 86400
@@ -356,7 +360,7 @@ KEY_SECTIONS = (
     ("ueg", "UEG", "needed", ("/ueg",), "pad goals"),
     ("alliance", "Alliance", "needed", ("/alliance",), "spies caught"),
     ("discoveries", "Discoveries", "needed", ("/discoveries",), "alliances marking us hostile"),
-    ("chat", "Public chat", "needed", ("/chat",), "global chat relay"),
+    ("chat", "Public chat", "needed", ("/chat",), "chat relay (alliance chat; global chat if global_chat_posts is on)"),
     ("market", "Market", "needed", ("/market",), "Earth's market corruption changes"),
     # Since 2026-11-05 /chat includes alliance messages only when the key may read Alliance chat, which is
     # unticked on new keys. /chat/alliance itself isn't read: /chat carries both channels.
@@ -629,7 +633,7 @@ def lite_news_kind(kind, icon):
         return "news_pad_building"
     return f"news_{kind}" if f"news_{kind}" in ALERT_KINDS else "news_other"
 
-# A short "still running" post to the corp channel once a day at this IRL hour (IRL_TIMEZONE), or None for none.
+# A short "still running" post to the bridge's channel once a day at this IRL hour (IRL_TIMEZONE), or None for none.
 # If it doesn't arrive, the bridge or its machine is down.
 DAILY_STATUS_HOUR: Optional[int] = 8
 # Times of day for the status post, as (hour, minute) in IRL_TIMEZONE, e.g. ((6, 0), (16, 0)); () for none.
@@ -843,14 +847,8 @@ def load_env():
             break
     load_settings(HERE / SETTINGS_FILE)
 
-    config = {
-        "api_key": os.environ.get("SOL_BRIDGE_API_KEY") or os.environ.get("SOL_API_KEY"),
-        "corp": os.environ.get("WEBHOOK_CORP"),
-        "general": os.environ.get("WEBHOOK_GENERAL"),
-        "alliance": os.environ.get("WEBHOOK_ALLIANCE"),
-        # Lite mode posts everything to one channel: WEBHOOK_LITE, or else the general channel.
-        "lite": os.environ.get("WEBHOOK_LITE") or os.environ.get("WEBHOOK_GENERAL"),
-    }
+    config = webhook_config(os.environ)
+    config["api_key"] = os.environ.get("SOL_BRIDGE_API_KEY") or os.environ.get("SOL_API_KEY")
     if not config["api_key"]:
         sys.exit(f"Missing settings: SOL_BRIDGE_API_KEY. Put it in {HERE / '.env'} (see .env.example).")
     config["irl_tz"] = load_timezone(os.environ.get("IRL_TIMEZONE", "").strip())
@@ -910,6 +908,7 @@ SETTINGS_SPEC = (
     ("alerts", "game_update_posts", "GAME_UPDATE_POSTS", "bool", None),
     ("alerts", "new_place_posts", "NEW_PLACE_POSTS", "bool", None),
     ("alerts", "fleet_move_posts", "FLEET_MOVE_POSTS", "bool", None),
+    ("alerts", "global_chat_posts", "GLOBAL_CHAT_POSTS", "bool", None),
     ("alerts", "elevator_trip_posts", "ELEVATOR_TRIP_POSTS", "bool", None),
     ("alerts", "power_short_below_percent", "POWER_SHORT_BELOW_PERCENT", "float", (1, 100)),
     ("alerts", "fleet_arrival_warning_minutes", "FLEET_ARRIVAL_WARNING_MINUTES", "int", (0, 1440)),
@@ -1216,7 +1215,7 @@ class SolApi:
         return False
 
     def alert(self, text):
-        """Log a key problem and post it to Discord (main() sets on_alert to post to the corp channel)."""
+        """Log a key problem and post it to Discord (main() sets on_alert to post to the bridge's channel)."""
         log(text)
         if self.on_alert:
             self.on_alert(text)
@@ -2451,6 +2450,8 @@ class ChatWatcher(Watcher):
             else:
                 fresh = [m for m in messages if m.get("id", 0) > self.newest.get(channel, 0)]
             self.newest[channel] = max(self.newest.get(channel, 0), newest_id(messages))
+            if channel == "global" and not GLOBAL_CHAT_POSTS and not self.ctx.get("lite"):
+                continue  # 1.09.00: off unless global_chat_posts is on; lite mode relays it to its own channel
 
             label = f" **[{header} - LATEST]**" if first else ""
             lines = [alert("chat" if channel == "global" else "alliance_chat", f"{icon}{label} {self.ctx['clock'].stamp(real_ms=m.get('sentAt'))} "
@@ -5123,8 +5124,19 @@ def acquire_lock():
     _lock_handle = handle  # kept open: the lock lasts as long as the process
 
 
+def webhook_config(env):
+    """The webhooks from the environment. Since 1.09.00 the full bridge posts everything to one: WEBHOOK_BRIDGE,
+    else WEBHOOK_CORP, else WEBHOOK_GENERAL (an older .env, or a program that sets the three, keeps working).
+    corp, general and alliance are all that one URL. Lite mode's one channel: WEBHOOK_LITE, else WEBHOOK_GENERAL."""
+    bridge = env.get("WEBHOOK_BRIDGE") or env.get("WEBHOOK_CORP") or env.get("WEBHOOK_GENERAL")
+    unused = [name for name in ("WEBHOOK_CORP", "WEBHOOK_GENERAL", "WEBHOOK_ALLIANCE")
+              if env.get(name) and env.get(name) != bridge]
+    return {"bridge": bridge, "corp": bridge, "general": bridge, "alliance": bridge,
+            "lite": env.get("WEBHOOK_LITE") or env.get("WEBHOOK_GENERAL"), "unused_webhooks": unused}
+
+
 def require_webhooks(config, names):
-    missing = [f"WEBHOOK_{name.upper()}" for name in names if not config.get(name)]
+    missing = [{"bridge": "WEBHOOK_BRIDGE"}.get(name, f"WEBHOOK_{name.upper()}") for name in names if not config.get(name)]
     if missing:
         sys.exit(f"Missing settings: {', '.join(missing)}. Put them in {HERE / '.env'} (see .env.example).")
 
@@ -5217,7 +5229,10 @@ def main():
     if BRIDGE_MODE == "lite" or (BRIDGE_MODE is None and sections is not None and "company" not in sections):
         require_webhooks(config, ("lite",))
         return run_lite(config, api, state, clock, discord, broadcast_startup, sections, once)
-    require_webhooks(config, ("corp", "general", "alliance"))
+    require_webhooks(config, ("bridge",))
+    if config.get("unused_webhooks"):
+        log(f"[Webhooks] Everything is posted to one channel since 1.09.00 (WEBHOOK_BRIDGE, else WEBHOOK_CORP); "
+            f"{', '.join(config['unused_webhooks'])} {'is' if len(config['unused_webhooks']) == 1 else 'are'} no longer used.")
     # Before the startup data: without the Company section /me never loads, and this says why.
     check_key_sections(api, state, api.on_alert)
     me, tables = load_startup_data(api, once)
