@@ -9,8 +9,8 @@ It only reads. It can't play the game or act for you, and it uses the API at abo
 ## Before you start
 
 1. **An API key.** In the game, go to Settings › Account › API keys and make a key just for the bridge (the API's limit of 60 reads a minute is per key, so don't share it with other tools). Tick these sections:
-   - **Company** (required), News and records, Launches and craft, Fleets, Contracts, Defense, Factions, Industry, Research, Mining, UEG, Alliance, Discoveries, Segments and Public chat.
-   - Optional: **Alliance chat**, to relay your alliance's channel (new keys leave it unticked, since passing alliance talk on is your alliance's business), and Account (only the daily gift reminder). Market isn't used.
+   - **Company** (required), News and records, Launches and craft, Fleets, Contracts, Defense, Factions, Industry, Research, Mining, UEG, Alliance, Discoveries, Segments, Market and Public chat.
+   - Optional: **Alliance chat**, to relay your alliance's channel (new keys leave it unticked, since passing alliance talk on is your alliance's business), and Account (only the daily gift reminder).
    - **Upgrading to 1.06.00?** Tick **Segments** on your existing key. The bridge picks the change up by itself, and until then it says once that the section is missing.
    - Leaving a section out turns off what needs it. The bridge says once at startup what's missing and what that stops.
 2. **Three Discord webhooks,** one per channel (they can all point at the same channel if you prefer). In Discord: Server Settings › Integrations › Webhooks › New Webhook, pick the channel, then "Copy Webhook URL". You need the Manage Webhooks permission on that server.
@@ -278,7 +278,7 @@ The bridge tells you when a new version is out (🆕 in the Corp channel). Downl
 | --- | --- |
 | `Missing settings: ...` | `.env` isn't next to `sol_watch.py`, or a line is empty. |
 | `HTTP 401`, or 🔑 "The game is rejecting our API key" | The API key is wrong or was revoked. Changing the account password revokes every key, and so does 90 days unused. Make a new one in the game, put it in `.env` and restart. |
-| 🔑 "Our API key may not read `/…`" (HTTP 403), or "Our API key is missing N sections" at startup | The key isn't allowed those sections. Tick them under Settings › Account › API keys; the same key keeps working. The bridge reads Company (required), News and records, Launches and craft, Fleets, Contracts, Defense, Factions, Industry, Research, Mining, UEG, Alliance, Discoveries, Segments and Public chat (global and alliance chat), and optionally Account (daily gift reminder). It doesn't need Market. |
+| 🔑 "Our API key may not read `/…`" (HTTP 403), or "Our API key is missing N sections" at startup | The key isn't allowed those sections. Tick them under Settings › Account › API keys; the same key keeps working. The bridge reads Company (required), News and records, Launches and craft, Fleets, Contracts, Defense, Factions, Industry, Research, Mining, UEG, Alliance, Discoveries, Segments, Market (Earth's market corruption) and Public chat (global and alliance chat), and optionally Account (daily gift reminder). |
 | `HTTP 429 ... Too many bad keys` | The key was revoked or mistyped. The API locks out bad keys for about 5 minutes. Fix the key, then wait. |
 | `[Rate limited]` | Something else is using the same key. Give the bridge its own key. |
 | `[Discord error] HTTP 401/404` | The webhook was deleted or the URL is wrong. Make a new one in Discord under Channel › Integrations › Webhooks. |

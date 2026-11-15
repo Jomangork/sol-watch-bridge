@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.16"
+VERSION = "1.07.17"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -357,6 +357,7 @@ KEY_SECTIONS = (
     ("alliance", "Alliance", "needed", ("/alliance",), "spies caught"),
     ("discoveries", "Discoveries", "needed", ("/discoveries",), "alliances marking us hostile"),
     ("chat", "Public chat", "needed", ("/chat",), "global chat relay"),
+    ("market", "Market", "needed", ("/market",), "Earth's market corruption changes"),
     # Since 2026-11-05 /chat includes alliance messages only when the key may read Alliance chat, which is
     # unticked on new keys. /chat/alliance itself isn't read: /chat carries both channels.
     ("alliance_chat", "Alliance chat", "optional", ("/chat/alliance",), "alliance chat relay"),
