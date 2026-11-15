@@ -4,6 +4,14 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.07.16 (Nov 15, 2026)
+
+For the game's Nov 15 update (power, relays, terraforming).
+
+- **Power at our places off Earth.** Each place now has a power balance. A place whose operations get less than `power_short_below_percent` (99%) of their power is posted with that share and its battery charge (⚡), and again if it falls 10 points further. When even life support is short, its people ration and then leave or die, so that's posted at once (🚨), and again when life support has full power. A day before the power rules start, a heads-up (📣): the fuel our fission plants were given runs out in time, so keep enriched uranium at each place. Running low on it is already covered by the usual "runs out in" warnings.
+- **Relay coverage.** A planetary system dropping out of our relay coverage is posted (📡): as the relay rules phase in, our craft there earn and find less, telescopes track nothing, and warships stationed there tire faster. A day before the relay rules start phasing in, a heads-up listing the systems we cover.
+- **Earth's market corruption.** A change in its level (low, rising, high, rife) is posted (🕵️). The large `/market` reply is read once an hour (`[intervals] market`).
+
 ## 1.07.15 (Nov 14, 2026)
 
 - **Our space elevator bookings** (new setting, off by default: `[alerts] elevator_trip_posts = yes`), like our fleets' flights. A new booking is posted with what it carries, which way and on which elevator, when its climber climbs if it's waiting in line, and when it arrives with a live countdown (🛗). A reminder comes `fleet_arrival_warning_minutes` (30) before it arrives (🔔), and a post when it has arrived. A booking canceled before it arrives is only logged. Ring freight between two elevators and crew bookings are named as such.

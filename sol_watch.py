@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.15"
+VERSION = "1.07.16"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -123,6 +123,11 @@ FLEET_ARRIVAL_WARNING_MINUTES = 30
 # (FLEET_ARRIVAL_WARNING_MINUTES), and arrived. Off unless settings.ini turns it on ([alerts] elevator_trip_posts).
 ELEVATOR_TRIP_POSTS = False
 ELEVATOR_NAMES = {"elevator": "Artsutanov Elevator"}  # the first one's id; the others' ids name them
+# Power at our places off Earth (build DT8v4-Zx): a place whose operations get less than this share of the power
+# they need is posted (life support short always is), and again when it falls this many points further.
+POWER_SHORT_BELOW_PERCENT = 99
+POWER_WORSE_BY_POINTS = 10
+INTERVAL_MARKET = 3600  # Earth's market corruption level (the /market reply is large, so seldom)
 INTERVAL_RECORDS = 600    # badges and firsts
 INTERVAL_NEWS = 300       # Solar News: pirate raids and thefts, salvages of our derelicts
 INTERVAL_PAD_GOALS = 300  # spaceports asking every company for a new launch pad's materials (/ueg)
@@ -639,6 +644,7 @@ SETTINGS_SPEC = (
     ("alerts", "new_place_posts", "NEW_PLACE_POSTS", "bool", None),
     ("alerts", "fleet_move_posts", "FLEET_MOVE_POSTS", "bool", None),
     ("alerts", "elevator_trip_posts", "ELEVATOR_TRIP_POSTS", "bool", None),
+    ("alerts", "power_short_below_percent", "POWER_SHORT_BELOW_PERCENT", "float", (1, 100)),
     ("alerts", "fleet_arrival_warning_minutes", "FLEET_ARRIVAL_WARNING_MINUTES", "int", (0, 1440)),
     ("incoming", "ignore_earth_moon", "INCOMING_IGNORE_EARTH_MOON", "bool", None),
     ("incoming", "ignore_places", "INCOMING_IGNORE_PLACES", "set", None),
@@ -652,7 +658,7 @@ SETTINGS_SPEC = (
     ("updates", "source_url", "BRIDGE_SOURCE_URL", "text", None),
 ) + tuple(("intervals", name.lower(), f"INTERVAL_{name}", "int", (MIN_POLL_SECONDS, 86400)) for name in (
     "CHAT", "CRAFT", "MINING", "CONTRACTS", "HISTORY", "RESEARCH", "DEFENSE", "COMPANY", "INDUSTRY",
-    "FLEET_MAP", "FLEETS", "SLOW", "DIPLOMACY", "RECORDS", "NEWS", "PAD_GOALS", "PLACES", "API_SPEC", "GAME_SITE"))
+    "FLEET_MAP", "FLEETS", "SLOW", "DIPLOMACY", "RECORDS", "NEWS", "PAD_GOALS", "PLACES", "API_SPEC", "GAME_SITE", "MARKET"))
 OFF_WORDS = {"off", "none", "no", "false", "0"}
 
 
@@ -2262,6 +2268,20 @@ def first_upper(text):
     return text[:1].upper() + text[1:]
 
 
+def heads_up(ctx, key, game_day, text, hours_before=24):
+    """A one-off post when a game day the game has set (a rules change) is within hours_before real hours: text
+    with {hours} (e.g. '23h') and {when} (its time) filled in. Saved in state.json, so once per date."""
+    clock, state = ctx["clock"], ctx["state"]
+    if not isinstance(game_day, (int, float)):
+        return []
+    hours = clock.hours_until(game_day)
+    warned = state.get("heads_up") or {}
+    if not 0 < hours <= hours_before or warned.get(key) == round(game_day, 3):
+        return []
+    state.set("heads_up", dict(warned, **{key: round(game_day, 3)}))
+    return [f"📣 {clock.stamp()} " + text.format(hours=hours_text(hours), when=clock.stamp(game_day=game_day))]
+
+
 def elevator_name(elevator_id):
     """'elevator' -> 'Artsutanov Elevator', 'tsiolkovsky_elevator' -> 'Tsiolkovsky Elevator'."""
     return ELEVATOR_NAMES.get(elevator_id) or str(elevator_id or "the elevator").replace("_", " ").title()
@@ -2474,6 +2494,13 @@ class CompanyWatcher(Watcher):
                              f"{hours_text(hours)}** ({mark}h warning) | {place['crew']:.0f} crew | "
                              f"{clock.stamp(game_day=clock.now_game_day() + days_left)}")
         self.countdown.prune()
+        burn_in = data.get("relayBurnInDay")
+        if isinstance(burn_in, (int, float)):  # the relay rules phase in from real day 15 to 30 of the burn-in
+            lines += heads_up(ctx, "relay_rules", burn_in + 15 * clock.time_scale,
+                              "**Relay rules start phasing in in {hours}** ({when}), in full 15 real days later: our "
+                              "craft outside relay coverage earn and find less, and warships stationed there tire "
+                              "faster. Covered now: " + (", ".join(place_name(ctx, x) for x in ctx["state"].get("relay_systems") or [])
+                                                         or "unknown") + ".")
         if first:
             low = [(p["placeId"], clock.game_days_to_hours(p["supplies"]["netDaysLeft"])) for p in sustainment
                    if p.get("crew") and (p.get("supplies") or {}).get("netDaysLeft") is not None
@@ -2779,6 +2806,7 @@ class IndustryWatcher(Watcher):
         lines += self.blocked_vehicles(industry, first)
         if ELEVATOR_TRIP_POSTS:
             lines += self.elevator_trips(industry.get("elevatorTrips") or [])
+        lines += self.power(industry.get("power"))
 
         if first:
             summary = f"🏭 **[INDUSTRY]** {len(stalls)} sites held up (inputs, crew or upkeep)"
@@ -2786,6 +2814,49 @@ class IndustryWatcher(Watcher):
                                     if soon else " | nothing running out within 72h"))
         return lines
 
+
+    def power(self, power):
+        """Power at our places off Earth ({plants[], places[{placeId, chargeMwh, share, lifeShare, day}], rulesDay}).
+        share is what the operations there get, lifeShare what life support gets. Life support short is urgent: its
+        people ration, then leave or die. Each place is posted once, again POWER_WORSE_BY_POINTS worse, and when life
+        support has power again. Saved in state.json. Also a heads-up a day before the power rules start."""
+        if not isinstance(power, dict):
+            return []
+        ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
+        lines = heads_up(ctx, "power_rules", power.get("rulesDay"),
+                         "**Power rules start in {hours}** ({when}): from then a place off Earth whose plants and battery "
+                         "fall short serves life support first, and its operations share what's left. The fuel our "
+                         "fission plants were given runs out in time: keep enriched uranium stocked at each place.")
+        posted = dict(state.get("power_short") or {})
+        short = {}
+        for p in power.get("places") or []:
+            share, life = p.get("share"), p.get("lifeShare")
+            if not isinstance(share, (int, float)) or not isinstance(life, (int, float)):
+                continue
+            if life < 0.999 or share * 100 < POWER_SHORT_BELOW_PERCENT:
+                short[str(p.get("placeId"))] = (share, life, p.get("chargeMwh"))
+        for place, (share, life, charge) in short.items():
+            old = posted.get(place)
+            name = place_name(ctx, place)
+            battery = f" | battery {charge:,.0f} MWh" if isinstance(charge, (int, float)) else ""
+            if life < 0.999 and (old is None or old["life"] >= 0.999 or life * 100 <= old["life"] * 100 - POWER_WORSE_BY_POINTS):
+                lines.append(f"🚨 {clock.stamp()} **Life support short of power at {name}:** it gets {life:.0%} of what it "
+                             f"needs, operations {share:.0%}. Its people ration, then leave or die{battery}")
+                posted[place] = {"share": share, "life": life}
+            elif life >= 0.999 and (old is None or share * 100 <= old["share"] * 100 - POWER_WORSE_BY_POINTS):
+                lines.append(f"⚡ {clock.stamp()} **Power short at {name}:** operations running {share:.0%}{battery}")
+                posted[place] = {"share": share, "life": life}
+            elif old and old["life"] < 0.999 <= life:
+                lines.append(f"🔋 {clock.stamp()} **Life support has full power again at {name}** | operations {share:.0%}")
+                posted[place] = {"share": share, "life": life}
+        for place in [p for p in posted if p not in short]:
+            if posted[place]["life"] < 0.999:
+                lines.append(f"🔋 {clock.stamp()} **Full power again at {place_name(ctx, place)}**")
+            else:
+                log(f"[Power] Full power again at {place_name(ctx, place)}")
+            del posted[place]
+        state.set("power_short", posted)
+        return lines
 
     def elevator_trips(self, trips):
         """Our space elevator bookings ({id, direction, elevatorId, toElevatorId, tonnes, bookedDay, departDay,
@@ -3687,6 +3758,7 @@ class DiscoveriesWatcher(Watcher):
                     capture("discoveries-hostileTo", hostile[key])
                 lines.append(f"🕵️ {clock.stamp()} **We've been marked hostile:** {summarise(self.ctx, hostile[key])}")
         self.hostile = hostile
+        lines += self.relays(data.get("relaySystems"))
         stopped = self.recoveries(data.get("codex"))
         if stopped:  # ours, not the alliance's: to the Corp channel
             corp = (self.ctx.get("webhooks") or {}).get("corp")
@@ -3695,6 +3767,26 @@ class DiscoveriesWatcher(Watcher):
             else:
                 lines += stopped
         return lines
+
+    def relays(self, systems):
+        """The planetary systems our relays cover (relaySystems). One dropping out is posted: as the relay rules phase
+        in, our craft there earn and find less, telescopes track nothing and warships stationed there tire faster.
+        One added is only logged. Saved in state.json."""
+        if not isinstance(systems, list):
+            return []
+        ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
+        now, saved = sorted(map(str, systems)), state.get("relay_systems")
+        state.set("relay_systems", now)
+        if saved is None:
+            return []
+        for system in sorted(set(now) - set(saved)):
+            log(f"[Relays] Our relays now cover {place_name(ctx, system)}")
+        lost = [place_name(ctx, x) for x in sorted(set(saved) - set(now))]
+        if not lost:
+            return []
+        return [f"📡 {clock.stamp()} **Relay coverage lost: {', '.join(lost)}.** Our craft there earn and find less, "
+                f"telescopes there track nothing, and warships stationed there tire faster (as the relay rules phase in). "
+                f"An orbiter on the relay task, a station or base, an ally's relay or Relay access from a faction covers it"]
 
     def recoveries(self, codex):
         if not isinstance(codex, dict) or not isinstance(codex.get("finds"), list):
@@ -3712,6 +3804,23 @@ class DiscoveriesWatcher(Watcher):
         state.set("codex_recovering", {story_id: f["recoverEndDay"] for story_id, f in finds.items()
                                        if f.get("recoverEndDay") is not None and f.get("recoveredDay") is None})
         return lines
+
+
+class MarketWatcher(Watcher):
+    """Earth's market corruption ("low", "rising", "high" or "rife": how much of Earth's trade is being siphoned
+    off), posted when it changes. Saved in state.json. The rest of /market isn't read here."""
+    path, interval, header = "/market", INTERVAL_MARKET, "MARKET"
+
+    def update(self, data, first):
+        level = data.get("corruption") if isinstance(data, dict) else None
+        if not isinstance(level, str):
+            return []
+        state, old = self.ctx["state"], self.ctx["state"].get("market_corruption")
+        state.set("market_corruption", level)
+        if old is None or old == level:
+            return []
+        return [f"🕵️ {self.ctx['clock'].stamp()} **Earth's market corruption is now {level}** (was {old}): how much of "
+                f"Earth's trade is being siphoned off"]
 
 
 class AccountWatcher(Watcher):
@@ -4340,7 +4449,7 @@ WATCHER_INTERVALS = {
     "DefenseWatcher": "INTERVAL_DEFENSE", "CompanyWatcher": "INTERVAL_COMPANY",
     "IndustryWatcher": "INTERVAL_INDUSTRY", "FleetMapWatcher": "INTERVAL_FLEET_MAP",
     "FleetsWatcher": "INTERVAL_FLEETS", "FactionsWatcher": "INTERVAL_SLOW", "AllianceWatcher": "INTERVAL_SLOW",
-    "DiscoveriesWatcher": "INTERVAL_SLOW", "AccountWatcher": "INTERVAL_SLOW",
+    "DiscoveriesWatcher": "INTERVAL_SLOW", "AccountWatcher": "INTERVAL_SLOW", "MarketWatcher": "INTERVAL_MARKET",
     "DiplomacyWatcher": "INTERVAL_DIPLOMACY", "RecordsWatcher": "INTERVAL_RECORDS", "NewsWatcher": "INTERVAL_NEWS",
     "PadGoalWatcher": "INTERVAL_PAD_GOALS", "ApiSpecWatcher": "INTERVAL_API_SPEC",
     "GameUpdateWatcher": "INTERVAL_GAME_SITE", "PlaceWatcher": "INTERVAL_PLACES",
@@ -4897,6 +5006,7 @@ def main():
         FactionsWatcher(ctx, config["corp"]),
         DiplomacyWatcher(ctx, config["corp"]),
         AccountWatcher(ctx, config["corp"]),
+        MarketWatcher(ctx, config["corp"]),
         RecordsWatcher(ctx, config["corp"]),
         DiscoveriesWatcher(ctx, config["alliance"]),
         NewsWatcher(ctx, config["corp"]),
