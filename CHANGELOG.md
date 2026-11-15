@@ -4,6 +4,10 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.08.00 (Nov 15, 2026)
+
+- **Alert labels, for the SOL-Watch Pocket phone app.** Every line the bridge posts is now an `Alert`: still a plain string, and Discord gets exactly the same text, but it also carries a `kind` (one of the ids in the new `ALERT_KINDS` list, each with a description and default priority), a `priority` (`urgent`, `normal`, `info` or `chat`), a plain-text `title`, the event's real time `game_ms` and an optional `key` for an alert posted again about the same thing. A program running the bridge in-process can sort and filter alerts without reading emoji. `ALERT_FIELDS = 1` says the bridge supports this. See "Alert labels" in the README.
+
 ## 1.07.17 (Nov 15, 2026)
 
 - **The key check now covers Market.** 1.07.16 started reading `/market` (Earth's market corruption) but didn't add it to the sections the bridge checks on its key, so a key without Market ticked got no warning. It's now listed: a missing Market section is posted like the others, and the bridge's reads of `/market` then only log their 403s.

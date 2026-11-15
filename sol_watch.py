@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.07.17"
+VERSION = "1.08.00"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -334,7 +334,7 @@ STARTUP_RETRY_MAX_SECONDS = 300
 
 # The API key sections the bridge reads (ids from the /api/v1 index), what each feeds, and its endpoints.
 # Tested 2026-11-04 with one-section keys: each section unlocks exactly its endpoints. "required": the bridge
-# can't start without it. Market and Segments aren't read.
+# can't start without it.
 KEY_SECTIONS = (
     ("company", "Company", "required", ("/me", "/company"),
      "the bridge can't start without it; also blocked queues, crew supplies, construction"),
@@ -363,6 +363,272 @@ KEY_SECTIONS = (
     ("alliance_chat", "Alliance chat", "optional", ("/chat/alliance",), "alliance chat relay"),
     ("account", "Account", "optional", ("/account",), "the daily gift reminder"),
 )
+
+# Labels on every alert, for a program that runs the bridge in-process (the SOL-Watch Pocket phone app): it can
+# sort and filter alerts without reading emoji or text. Discord gets exactly the same text either way.
+# ALERT_FIELDS goes up when Alert's fields change. A kind is never renamed once released; new ones are added.
+ALERT_FIELDS = 1
+ALERT_PRIORITIES = ("urgent", "normal", "info", "chat")  # urgent: the phone makes a sound; info: low-key
+ALERT_KINDS = {  # kind: (what it is, for a settings screen; its priority)
+    # Bridge and API key
+    "bridge_status": ("Daily bridge status", "info"),
+    "bridge_update": ("A new SOL-Watch version is out", "normal"),
+    "key_problem": ("The API key can't read something the bridge needs", "urgent"),
+    "key_optional": ("An optional API key section isn't ticked", "info"),
+    "key_ok": ("The API key works again", "info"),
+    "api_changed": ("The SOL API changed", "normal"),
+    "game_update": ("A new game version is live", "normal"),
+    "heads_up": ("A game rule change starts within a day", "normal"),
+    # Research
+    "research_summary": ("Research at startup", "info"),
+    "research_started": ("Research started", "normal"),
+    "research_soon": ("Research finishes in a few minutes", "normal"),
+    "research_done": ("Research finished", "normal"),
+    "research_stopped": ("Research stopped", "normal"),
+    "lab_idle": ("The lab is idle", "normal"),
+    "research_queue_empty": ("The research queue is empty", "normal"),
+    # Craft and launches
+    "launch_summary": ("Latest launch at startup", "info"),
+    "craft_on_pad": ("A craft is on the pad", "normal"),
+    "craft_launched": ("A craft launched", "normal"),
+    "craft_arrived": ("A craft arrived", "normal"),
+    "craft_completed": ("A mission completed", "normal"),
+    "craft_failed": ("A mission failed", "urgent"),
+    "craft_status": ("A craft's status changed", "normal"),
+    "craft_safe_mode": ("A craft entered safe mode", "normal"),
+    "craft_lost": ("A craft was lost", "normal"),
+    "escape_capsule": ("Escape capsules out, or crews held captive", "urgent"),
+    "escape_capsule_gone": ("An escape capsule is no longer listed", "normal"),
+    # Mining and industry
+    "mining_summary": ("Mining orders at startup", "info"),
+    "mining_order": ("A mining order changed", "normal"),
+    "ore_body_empty": ("An ore body ran out", "normal"),
+    "industry_summary": ("Industry at startup", "info"),
+    "site_stopped": ("Sites stopped", "normal"),
+    "site_slowed": ("Sites slowed", "normal"),
+    "stock_running_out": ("A stock runs out soon", "normal"),
+    "storage_filling": ("Storage fills up soon", "normal"),
+    "vehicle_blocked": ("A vehicle is blocked", "normal"),
+    "elevator_booked": ("Elevator cargo booked", "normal"),
+    "elevator_soon": ("Elevator cargo arrives soon", "normal"),
+    "elevator_arrived": ("Elevator cargo arrived", "normal"),
+    "power_short": ("Power short at one of our places", "normal"),
+    "power_restored": ("Full power again", "normal"),
+    "life_support_short": ("Life support short of power", "urgent"),
+    "life_support_restored": ("Life support has full power again", "normal"),
+    # Company
+    "facility_upgraded": ("A facility was upgraded", "normal"),
+    "upgrade_done": ("An upgrade finished", "normal"),
+    "queue_blocked": ("A queued action is blocked", "normal"),
+    "queue_summary": ("Blocked queues at startup", "info"),
+    "supplies_low": ("Crew supplies run out soon", "normal"),
+    "supplies_summary": ("Crew supplies at startup", "info"),
+    "daily_gift": ("The daily login gift isn't claimed", "normal"),
+    # Contracts
+    "contract_board_summary": ("Contract board at startup", "info"),
+    "contract_offer": ("A new contract on the board", "normal"),
+    "contract_repair": ("A repair contract", "normal"),
+    "contract_taken": ("A contract was taken", "normal"),
+    "contract_history_summary": ("Contract history at startup", "info"),
+    "contract_closed": ("A contract closed", "normal"),
+    "contract_list": ("A new item on a contract list", "normal"),
+    "bounty": ("A new bounty", "normal"),
+    "rescue_contract": ("A new rescue contract", "normal"),
+    "rescue_under_way": ("A rescue under way", "normal"),
+    "alliance_jobs": ("New alliance jobs", "normal"),
+    "alliance_job": ("A new alliance job", "normal"),
+    "ship_order": ("A new ship order", "normal"),
+    "ship_order_update": ("A ship order changed", "normal"),
+    "siege_contract": ("A siege contract against us", "urgent"),
+    "siege_contract_ended": ("A siege contract against us ended", "normal"),
+    # Defense and hazards
+    "defense_summary": ("Defense at startup", "info"),
+    "asteroid_threat": ("A new asteroid threat", "normal"),
+    "asteroid_outcome": ("An asteroid threat's outcome", "normal"),
+    "hazard_forecast": ("A hazard forecast (solar flare)", "normal"),
+    "hazard": ("A hazard struck us", "urgent"),
+    "outpost_damaged": ("Our outpost was hit", "normal"),
+    "damage": ("Something of ours was damaged", "normal"),
+    "debris_field": ("A new debris field", "normal"),
+    # Fleets and battles
+    "incoming_fleet": ("A fleet is heading for us", "urgent"),
+    "battle_ours": ("A battle with us or our allies", "normal"),
+    "wreck_ours": ("A wreck of ours or our allies'", "normal"),
+    "battle_elsewhere": ("A battle elsewhere", "normal"),
+    "wreck_elsewhere": ("A wreck elsewhere", "normal"),
+    "our_battle": ("Our fleet is in battle", "normal"),
+    "our_battle_over": ("Our battle is over", "normal"),
+    "our_duel": ("A duel of ours", "normal"),
+    "our_duel_over": ("Our duel finished", "normal"),
+    "our_siege": ("A siege we are part of", "normal"),
+    "our_siege_ended": ("A siege we were part of ended", "normal"),
+    "our_combat": ("Our fleet in combat", "normal"),
+    "our_combat_over": ("Our fleet's combat is over", "normal"),
+    "fleet_left": ("Our fleet left", "normal"),
+    "fleet_rerouted": ("Our fleet changed course", "normal"),
+    "fleet_soon": ("Our fleet lands soon", "normal"),
+    "fleet_landed": ("Our fleet landed", "normal"),
+    # Factions, Earth and diplomacy
+    "standings_summary": ("Faction standings at startup", "info"),
+    "standing_changed": ("A faction standing changed", "normal"),
+    "government_changed": ("Earth's government changed", "normal"),
+    "ballot": ("Earth's ballot", "normal"),
+    "ballot_closing": ("Earth's ballot closes soon", "normal"),
+    "policies_in_force": ("Earth's policies in force", "normal"),
+    "shipbroker_summary": ("Halcyon Arms Exchange at startup", "info"),
+    "shipbroker_listed": ("Halcyon Arms Exchange listed ships", "normal"),
+    "clear_sky_data": ("New Clear Sky data in the API", "normal"),
+    "clear_sky_data_summary": ("Clear Sky data at startup", "info"),
+    "colony_to_name": ("A colony is ours to name", "normal"),
+    "deal_offer": ("A deal offered to us", "normal"),
+    "deal_status": ("A deal's status changed", "normal"),
+    "deal_countered": ("A deal was countered", "normal"),
+    "deal_expiring": ("An offer to us expires soon", "normal"),
+    "deal_shortfall": ("We're short of what a deal needs", "normal"),
+    "agreement_new": ("A new agreement", "normal"),
+    "agreement_ended": ("An agreement ended", "normal"),
+    "spy_caught": ("A spy caught spying on our alliance", "normal"),
+    "our_spy_caught": ("One of our spies was caught", "normal"),
+    "marked_hostile": ("We were marked hostile", "normal"),
+    "relay_lost": ("Relay coverage lost", "normal"),
+    "codex_stopped": ("A Codex recovery stopped", "normal"),
+    "market_corruption": ("Earth's market corruption changed", "normal"),
+    # News, records and places (full bridge)
+    "badge_earned": ("We earned a badge", "normal"),
+    "world_first": ("A first in Sol for us", "normal"),
+    "tech_first": ("First company to research something", "normal"),
+    "record": ("A record of ours", "normal"),
+    "theft": ("Ships of ours may have been stolen", "urgent"),
+    "clear_sky": ("Clear Sky acted against us", "normal"),
+    "pirates_hit_us": ("Pirates hit us", "normal"),
+    "pirate_activity": ("Pirate activity", "normal"),
+    "derelict_salvaged": ("One of our derelicts was salvaged", "normal"),
+    "salvage_target_taken": ("A derelict we were heading for was taken", "normal"),
+    "faction_warship_sale": ("A faction bought a warship", "normal"),
+    "market_event": ("A market event", "normal"),
+    "segment_cost_rise": ("A segment's tax or permit rises", "normal"),
+    "claim_takeover": ("A rival is taking over our claim", "normal"),
+    "claim_lost": ("We lost a claim", "normal"),
+    "new_places": ("New places", "normal"),
+    "pad_goal": ("A launch pad wants materials", "normal"),
+    "derelict_found": ("A derelict worth salvaging", "normal"),
+    # Chat
+    "chat": ("Global chat", "chat"),
+    "alliance_chat": ("Alliance chat", "chat"),
+    # Lite
+    "lite_setup": ("Sol-Watch Lite set up", "info"),
+    "lite_status": ("Sol-Watch Lite digest", "info"),
+    "company_renamed": ("A company changed its name", "normal"),
+    "bully_marked": ("A company was marked a bully", "normal"),
+    "duel_record": ("A company's duel record", "normal"),
+    "crew_lost": ("Crew lost (the memorial)", "normal"),
+    "news_raid": ("News: pirate raids", "normal"),
+    "news_hazard": ("News: hazards and flare forecasts", "normal"),
+    "news_faction": ("News: factions", "normal"),
+    "news_ambition": ("News: faction Ambitions", "normal"),
+    "news_faction_colony": ("News: faction colonies", "normal"),
+    "news_segment": ("News: segments", "normal"),
+    "news_politics": ("News: Earth's politics", "normal"),
+    "news_holiday": ("News: holidays", "normal"),
+    "news_strike": ("News: sabotage", "normal"),
+    "news_clear_sky": ("News: Clear Sky", "normal"),
+    "news_founded": ("News: new companies", "normal"),
+    "news_inactive": ("News: companies gone dark", "normal"),
+    "news_alliance": ("News: alliances", "normal"),
+    "news_colony": ("News: colonies", "normal"),
+    "news_station": ("News: stations", "normal"),
+    "news_outpost": ("News: outposts", "normal"),
+    "news_range_expansion": ("News: new launch pads", "normal"),
+    "news_pad_building": ("News: launch pads being built", "normal"),
+    "news_ueg_built": ("News: UEG projects", "normal"),
+    "news_ueg_navy": ("News: UEG Navy", "normal"),
+    "news_ueg_elevator": ("News: space elevators", "normal"),
+    "news_badge_first": ("News: firsts in Sol", "normal"),
+    "news_project_honor": ("News: project honors", "normal"),
+    "news_market_event": ("News: market events", "normal"),
+    "news_salvage": ("News: salvage", "normal"),
+    "news_abandoned": ("News: abandoned craft", "normal"),
+    "news_launch_failure": ("News: launch failures", "normal"),
+    "news_outpost_surrendered": ("News: surrendered outposts", "normal"),
+    "news_return": ("News: returns", "normal"),
+    "news_terrorist_hunt": ("News: terrorist hunts", "normal"),
+    "news_frontier": ("News: Codex firsts", "normal"),
+    "news_battle_begun": ("News: battles begun", "normal"),
+    "news_attack_repelled": ("News: attacks beaten off", "normal"),
+    "news_siege_laid": ("News: sieges laid", "normal"),
+    "news_other": ("News of a kind the bridge hasn't seen before", "normal"),
+}
+
+
+class Alert(str):
+    """Alert text that also carries labels. Behaves as a plain string everywhere.
+    kind: an ALERT_KINDS id. priority: one of ALERT_PRIORITIES. title: the headline as plain text (no emoji,
+    ** marks or game time). game_ms: the event's real time in epoch ms, or None. key: the same id when an
+    alert is posted again for the same thing (an update to it), or "". (title hides str.title(), which alert lines never use.)"""
+    kind: str
+    priority: str
+    title: str  # type: ignore[assignment]
+    game_ms: Optional[int]
+    key: str
+
+    def __new__(cls, text, kind, priority="normal", title="", game_ms=None, key=""):
+        s = super().__new__(cls, text)
+        s.kind, s.priority, s.title, s.game_ms, s.key = kind, priority, title, game_ms, key
+        return s
+
+
+STAMP_TIMES: dict = {}  # a game-time box Clock.stamp wrote -> its real ms, for Alert.game_ms
+STAMP_BOX_RE = re.compile(r"`[^`\n]*\d{4}[^`\n]*`")
+TITLE_STAMP_RE = re.compile(r"\s*(?:·\s*)?`[^`\n]*\d{4}[^`\n]*`(?: · [^\n<]*<t:\d+:t> \(<t:\d+:R>\))?")
+
+
+def alert_title(text):
+    """The headline of an alert as plain text: its first line, before any " | ", without emoji, ** or times.
+    '🚨⚔️ **[INCOMING FLEET]** 3× Corvette | Arrives …' → 'Incoming fleet: 3× Corvette'."""
+    line = str(text).split("\n", 1)[0]
+    line = TITLE_STAMP_RE.sub("", line)
+    line = re.sub(r"<t:\d+:\w>", "", line)
+    line = re.sub(r"^[^\w*\[(`\"'$]+", "", line)  # the emoji
+    label = re.match(r"\*\*\[([^\]]+)\]\*\*\s*", line)
+    if label:
+        name = label.group(1).split(" - ")[0].split(" | ")[0].strip()
+        rest = line[label.end():]
+        line = name.capitalize() + (": " + rest if rest.strip() else "")
+    line = line.split(" | ")[0]
+    line = re.sub(r"\*\*|`", "", line)
+    line = re.sub(r"\s+", " ", line).strip(" :·-")
+    return line if len(line) <= 140 else line[:139].rstrip() + "…"
+
+
+def alert(kind, text, priority=None, title=None, key=""):
+    """text labelled as an Alert of kind (an ALERT_KINDS id). Its priority is the kind's unless given, its
+    title the headline, and its time that of its first game-time stamp."""
+    if text is None or text == "":
+        return text
+    box = STAMP_BOX_RE.search(text)
+    game_ms = STAMP_TIMES.get(box.group(0)) if box else None
+    return Alert(text, kind, priority or ALERT_KINDS.get(kind, ("", "normal"))[1],
+                 alert_title(text) if title is None else title,
+                 int(game_ms) if isinstance(game_ms, (int, float)) else None, key)
+
+
+def relabel(text, like):
+    """text with the labels of like, an Alert (a line rewritten before posting keeps them)."""
+    if not isinstance(like, Alert) or isinstance(text, Alert) and text == like:
+        return text
+    return Alert(text, like.kind, like.priority, like.title, like.game_ms, like.key)
+
+
+def lite_news_kind(kind, icon):
+    """The alert kind of a lite news item of the game's kind, given the icon it's posted with."""
+    if icon == LITE_AMBITION_ICON:
+        return "news_ambition"
+    if kind == "faction" and icon == LITE_NEWS_ICONS["colony"]:
+        return "news_faction_colony"
+    if kind == "range_expansion" and icon == "🏗️":
+        return "news_pad_building"
+    return f"news_{kind}" if f"news_{kind}" in ALERT_KINDS else "news_other"
+
 # A short "still running" post to the corp channel once a day at this IRL hour (IRL_TIMEZONE), or None for none.
 # If it doesn't arrive, the bridge or its machine is down.
 DAILY_STATUS_HOUR: Optional[int] = 8
@@ -888,10 +1154,10 @@ class SolApi:
                 read_ok()
                 if self.rejected:
                     self.rejected = False
-                    self.alert("🔑 The game accepts our API key again. The bridge is reading as usual.")
+                    self.alert(alert("key_ok", "🔑 The game accepts our API key again. The bridge is reading as usual."))
                 if path in self.forbidden:
                     self.forbidden.discard(path)
-                    self.alert(f"🔑 Our API key can read `{path}` again.")
+                    self.alert(alert("key_ok", f"🔑 Our API key can read `{path}` again."))
             if response.status_code == 200:
                 try:
                     body = response.json()
@@ -933,8 +1199,8 @@ class SolApi:
                 log(f"[API key] {path}: HTTP 403, this key may not read it: {text[:200]}")
                 if path in self.expected_forbidden:
                     return True  # its section was reported missing at startup
-                self.alert(f"🔑 **Our API key may not read `{path}`.** Part of the bridge stays quiet until the "
-                           f"key is allowed that section (in the game: Settings › Account › API keys).")
+                self.alert(alert("key_problem", f"🔑 **Our API key may not read `{path}`.** Part of the bridge stays quiet until the "
+                           f"key is allowed that section (in the game: Settings › Account › API keys)."))
             return True
         if status == 401 or (status == 429 and "bad key" in text.lower()):
             wait = float(response.headers.get("Retry-After") or 300)
@@ -942,10 +1208,10 @@ class SolApi:
             if not self.rejected:
                 self.rejected = True
                 log(f"[API key] Rejected (HTTP {status}): {text[:200]}")
-                self.alert("🔑 **The game is rejecting our API key.** Every read fails until it's replaced. "
+                self.alert(alert("key_problem", "🔑 **The game is rejecting our API key.** Every read fails until it's replaced. "
                            "Changing the account password revokes every key, and so does 90 days unused. Make a "
                            "new key in the game (Settings › Account › API keys), put it in `.env` as "
-                           "`SOL_BRIDGE_API_KEY` and restart the bridge.")
+                           "`SOL_BRIDGE_API_KEY` and restart the bridge."))
             return True
         return False
 
@@ -1003,6 +1269,9 @@ class GameClock:
         sol = J2000_EPOCH + timedelta(days=game_day)
         icon = f"{GAME_TIME_ICON} " if GAME_TIME_ICON else ""
         text = f"`{icon}{sol.day} {sol.strftime(GAME_TIME_FORMAT)}`"
+        if len(STAMP_TIMES) > 5000:
+            STAMP_TIMES.clear()
+        STAMP_TIMES[text] = real_ms
         if real_ms >= (time.time() + FUTURE_STAMP_AFTER_SECONDS) * 1000:
             unix = int(real_ms // 1000)
             text += f" · {REAL_TIME_ICON} <t:{unix}:t> (<t:{unix}:R>)"
@@ -1090,7 +1359,7 @@ class Discord:
         return True
 
     def post(self, webhook_url, header, lines):
-        lines = merge_repeats([stamp_after_headline(line) for line in lines])
+        lines = merge_repeats([relabel(stamp_after_headline(line), line) for line in lines])
         for line in lines:
             log(line)
         if not self.enabled or not lines:
@@ -1143,7 +1412,7 @@ def merge_repeats(lines):
     for line, n in counts.items():
         if n > 1:
             first, _, rest = line.partition("\n")
-            line = f"{first} (×{n})" + (f"\n{rest}" if rest else "")
+            line = relabel(f"{first} (×{n})" + (f"\n{rest}" if rest else ""), line)
         merged.append(line)
     return merged
 
@@ -1301,12 +1570,12 @@ class DailyStatus:
             game_updates += f" ({excused} brief outage{'s' if excused != 1 else ''} during them)"
         build = ", ".join(b.split("/")[-1] for b in (self.ctx["state"].get("game_site") or {}).get("bundles", []) if b.endswith(".js"))
         queued = len(getattr(self.ctx["discord"], "queue", []) or [])
-        return (f"🟢 **[BRIDGE STATUS]** Sol-Watch v{VERSION} running for {uptime} | "
+        return alert("bridge_status", (f"🟢 **[BRIDGE STATUS]** Sol-Watch v{VERSION} running for {uptime} | "
                 f"{POLL_COUNTS['polls']:,} polls, {POLL_COUNTS['failed']:,} failed | Game updates: {game_updates} | "
                 + (f"Game server down: {', '.join(downs)} | " if downs else "")
                 + f"Problems logged: {problems}"
                 + (f" | {queued} Discord message(s) waiting to send" if queued else "")
-                + (f" | Game build: {build}" if build else ""))
+                + (f" | Game build: {build}" if build else "")))
 
 
 class Watcher:
@@ -1380,18 +1649,18 @@ class ResearchWatcher(Watcher):
 
         if first:
             if tech_id:
-                lines.append(f"🔬 **[RESEARCH ACTIVE]** **{names.get(tech_id, tech_id)}** (pace: {job.get('pace')})\n"
-                             f"Expected completion: {clock.stamp(game_day=job.get('completeDay'))}")
+                lines.append(alert("research_summary", f"🔬 **[RESEARCH ACTIVE]** **{names.get(tech_id, tech_id)}** (pace: {job.get('pace')})\n"
+                             f"Expected completion: {clock.stamp(game_day=job.get('completeDay'))}"))
             else:
-                lines.append("💤 **[RESEARCH IDLE]** Nothing is being researched.")
+                lines.append(alert("research_summary", "💤 **[RESEARCH IDLE]** Nothing is being researched."))
         else:
             finished = [names.get(t, t) for t in sorted(known - self.known)]
             started = tech_id and tech_id != self.tech_id
             for name in finished:
-                lines.append(f"✅ {clock.stamp()} **{name}** research finished!")
+                lines.append(alert("research_done", f"✅ {clock.stamp()} **{name}** research finished!"))
             if started:
-                lines.append(f"🔬 {clock.stamp(game_day=job.get('startDay'))} Started **{names.get(tech_id, tech_id)}**\n"
-                             f"Expected completion: {clock.stamp(game_day=job.get('completeDay'))}")
+                lines.append(alert("research_started", f"🔬 {clock.stamp(game_day=job.get('startDay'))} Started **{names.get(tech_id, tech_id)}**\n"
+                             f"Expected completion: {clock.stamp(game_day=job.get('completeDay'))}"))
             queue = self.ctx.get("research_queue")
             if tech_id:
                 self.waiting = None
@@ -1400,11 +1669,11 @@ class ResearchWatcher(Watcher):
                 self.waiting = (finished, time.time())
             elif finished:
                 # The company watcher warns earlier, when the queue empties; this is the lab actually stopping.
-                lines = [f"🏁 {clock.stamp()} **{', '.join(finished)}** research finished - "
-                         f"⚠️ **nothing else started, the lab is now idle.** Queue new research!"]
+                lines = [alert("lab_idle", f"🏁 {clock.stamp()} **{', '.join(finished)}** research finished - "
+                         f"⚠️ **nothing else started, the lab is now idle.** Queue new research!")]
             elif self.tech_id:
-                lines.append(f"💤 {clock.stamp()} Research on **{names.get(self.tech_id, self.tech_id)}** stopped - "
-                             f"the lab is idle.")
+                lines.append(alert("research_stopped", f"💤 {clock.stamp()} Research on **{names.get(self.tech_id, self.tech_id)}** stopped - "
+                             f"the lab is idle."))
             if self.waiting and not tech_id and (not queue or time.time() - self.waiting[1] >= RESEARCH_START_GRACE_SECONDS):
                 done, since = self.waiting
                 minutes = max(1, round((time.time() - since) / 60))
@@ -1416,8 +1685,8 @@ class ResearchWatcher(Watcher):
                             f"but hasn't started{reason}")
                 else:
                     held = " The queue has emptied since."
-                lines.append(f"🏁 {clock.stamp()} ⚠️ **The lab is idle**, {minutes} min after **{', '.join(done)}** "
-                             f"finished.{held}")
+                lines.append(alert("lab_idle", f"🏁 {clock.stamp()} ⚠️ **The lab is idle**, {minutes} min after **{', '.join(done)}** "
+                             f"finished.{held}"))
                 self.waiting = None
 
         # Five real minutes before the current job completes.
@@ -1428,8 +1697,8 @@ class ResearchWatcher(Watcher):
             name = names.get(tech_id, tech_id)
             reminders.set(f"research:{tech_id}", clock.real_ms_for(job["completeDay"]) - RESEARCH_WARNING_SECONDS * 1000,
                           self.webhook, self.header,
-                          f"⏰ **{name}** research completes in {RESEARCH_WARNING_SECONDS // 60} minutes "
-                          f"{clock.stamp(game_day=job['completeDay'])}")
+                          alert("research_soon", f"⏰ **{name}** research completes in {RESEARCH_WARNING_SECONDS // 60} minutes "
+                          f"{clock.stamp(game_day=job['completeDay'])}"))
 
         self.known, self.tech_id = known, tech_id
         self.ctx["research_job"] = job if tech_id else None  # the company watcher's queue alert uses it
@@ -1473,9 +1742,9 @@ class CraftWatcher(Watcher):
         if first:
             latest = max(missions.values(), key=lambda m: m.get("launchDay") or 0, default=None)
             if latest:
-                lines.append(f"🚀 **[FLEET - LATEST LAUNCH]** {clock.stamp(game_day=latest.get('launchDay'))} "
+                lines.append(alert("launch_summary", f"🚀 **[FLEET - LATEST LAUNCH]** {clock.stamp(game_day=latest.get('launchDay'))} "
                              f"**{latest.get('name')}** → **{body_name(self.ctx, latest.get('destinationId'))}** | "
-                             f"Status: **{latest.get('status')}**")
+                             f"Status: **{latest.get('status')}**"))
         else:
             for mission_id, m in missions.items():
                 name, dest, status = m.get("name"), body_name(self.ctx, m.get("destinationId")), m.get("status")
@@ -1486,8 +1755,8 @@ class CraftWatcher(Watcher):
                     log(f"[Fleet] New mission {name} → {dest}{queue}")
                     continue
                 if self.queued.get(mission_id) and not m.get("rangeQueued") and status not in ("transit", "failed"):
-                    lines.append(f"🛫 {clock.stamp()} **{name}** left the queue and is on the pad at "
-                                 f"**{place_name(self.ctx, m.get('launchRegion'))}** | Liftoff {clock.stamp(game_day=m.get('launchDay'))}")
+                    lines.append(alert("craft_on_pad", f"🛫 {clock.stamp()} **{name}** left the queue and is on the pad at "
+                                 f"**{place_name(self.ctx, m.get('launchRegion'))}** | Liftoff {clock.stamp(game_day=m.get('launchDay'))}"))
                 if old == status:
                     continue
                 elif old == "derelict":
@@ -1495,31 +1764,31 @@ class CraftWatcher(Watcher):
                     # Salvages of ours are posted from the news by NewsWatcher.
                     log(f"[Fleet] Derelict {name} is now {status}: {m.get('outcome') or ''}".rstrip(": "))
                 elif status == "transit":
-                    lines.append(f"🚀 {clock.stamp(game_day=m.get('launchDay'))} **{name}** launched for **{dest}**!")
+                    lines.append(alert("craft_launched", f"🚀 {clock.stamp(game_day=m.get('launchDay'))} **{name}** launched for **{dest}**!"))
                 elif status == "active":
-                    lines.append(f"✨ {clock.stamp(game_day=m.get('arriveDay'))} **{name}** arrived at **{dest}** and is operating.")
+                    lines.append(alert("craft_arrived", f"✨ {clock.stamp(game_day=m.get('arriveDay'))} **{name}** arrived at **{dest}** and is operating."))
                 elif status == "complete" and "decommissioned" in (m.get("outcome") or "").lower():
                     log(f"[Fleet] {name} decommissioned")  # our own choice: not posted
                 elif status == "complete":
-                    lines.append(f"🏁 {clock.stamp(game_day=m.get('endDay'))} **{name}** completed. {m.get('outcome') or ''}".rstrip())
+                    lines.append(alert("craft_completed", f"🏁 {clock.stamp(game_day=m.get('endDay'))} **{name}** completed. {m.get('outcome') or ''}".rstrip()))
                 elif status == "failed":
-                    lines.append(f"🚨 {clock.stamp(game_day=m.get('endDay'))} **{name}** failed! {m.get('outcome') or ''}".rstrip())
+                    lines.append(alert("craft_failed", f"🚨 {clock.stamp(game_day=m.get('endDay'))} **{name}** failed! {m.get('outcome') or ''}".rstrip()))
                 else:
                     where = orbit_text(m.get("segmentId"), m.get("destinationId"))
                     where = f" in **{where}**" if where else ""
-                    lines.append(f"⚠️ {clock.stamp()} **{name}**{where} is now **{status}** (was {old}).")
+                    lines.append(alert("craft_status", f"⚠️ {clock.stamp()} **{name}**{where} is now **{status}** (was {old})."))
 
             for mission_id in safe_mode.keys() - self.safe_mode.keys():
                 if safe_mode[mission_id].get("eventId") is not None:
                     continue  # hazard-driven: summarised in the defense alerts instead
                 name = missions.get(mission_id, {}).get("name") or f"Craft #{mission_id}"
-                lines.append(f"⚠️ {clock.stamp()} **{name}** entered safe mode.")
+                lines.append(alert("craft_safe_mode", f"⚠️ {clock.stamp()} **{name}** entered safe mode."))
 
             for loss in losses:
                 if isinstance(loss.get("id"), int) and loss["id"] > self.newest_loss:
-                    lines.append(f"💀 {clock.stamp(game_day=loss.get('day'))} **{loss.get('name')}** ({loss.get('type')}) lost: "
+                    lines.append(alert("craft_lost", f"💀 {clock.stamp(game_day=loss.get('day'))} **{loss.get('name')}** ({loss.get('type')}) lost: "
                                  f"{loss.get('cause')} | Crew lost {loss.get('crewLost', 0)}, saved {loss.get('crewSaved', 0)} "
-                                 f"| Value lost {money(loss.get('valueLost'))}")
+                                 f"| Value lost {money(loss.get('valueLost'))}"))
 
         self.statuses = {mission_id: m.get("status") for mission_id, m in missions.items()}
         self.queued = {mission_id: bool(m.get("rangeQueued")) for mission_id, m in missions.items()}
@@ -1541,10 +1810,10 @@ class CraftWatcher(Watcher):
             if "capsules" not in ctx["captured"]:
                 ctx["captured"].add("capsules")
                 capture("craft-capsules", now[key])
-            lines.append(f"🆘 **[ESCAPE CAPSULES / CAPTIVES]** {clock.stamp()} {capsule_text(ctx, now[key])}")
+            lines.append(alert("escape_capsule", f"🆘 **[ESCAPE CAPSULES / CAPTIVES]** {clock.stamp()} {capsule_text(ctx, now[key])}"))
         for key in known.keys() - now.keys():
-            lines.append(f"🛟 {clock.stamp()} No longer listed (picked up, handed over or lost): "
-                         f"{known[key].get('text', key)}")
+            lines.append(alert("escape_capsule_gone", f"🛟 {clock.stamp()} No longer listed (picked up, handed over or lost): "
+                         f"{known[key].get('text', key)}"))
         state.set("capsules_seen", {key: {"text": capsule_text(ctx, item)} for key, item in now.items()})
         return lines
 
@@ -1564,9 +1833,9 @@ class MiningWatcher(Watcher):
             status = order.get("status")
             where, what = place_name(self.ctx, place), good_name(self.ctx, good)
             if first:
-                lines.append(f"⛏️ **[MINING ORDER]** **{where}** ({what}) | {status}")
+                lines.append(alert("mining_summary", f"⛏️ **[MINING ORDER]** **{where}** ({what}) | {status}"))
             elif self.statuses.get((place, good)) != status:
-                lines.append(f"⛏️ {clock.stamp()} **{where}** ({what}) | {status} | Dug: {order.get('dug') or 0:,.0f} t")
+                lines.append(alert("mining_order", f"⛏️ {clock.stamp()} **{where}** ({what}) | {status} | Dug: {order.get('dug') or 0:,.0f} t"))
 
         self.statuses = {key: order.get("status") for key, order in orders.items()}
         return lines
@@ -1593,7 +1862,7 @@ class OreBodiesWatcher(Watcher):
         else:
             for (place, good), name in depleted.items():
                 if (place, good) not in self.depleted:
-                    lines.append(f"⚠️ {clock.stamp()} **{name}** (`{place}`) has run out of **{good}**.")
+                    lines.append(alert("ore_body_empty", f"⚠️ {clock.stamp()} **{name}** (`{place}`) has run out of **{good}**."))
 
         self.depleted = depleted
         return lines
@@ -1782,15 +2051,15 @@ class ContractsWatcher(Watcher):
             shown = sorted((o for o in offers.values() if passes_tier_filter(o)),
                            key=lambda o: o.get("postedDay", 0), reverse=True)
             if shown:
-                lines.append(f"📜 **[CONTRACT BOARD - LATEST]** {self.offer_text(shown[0])}")
+                lines.append(alert("contract_board_summary", f"📜 **[CONTRACT BOARD - LATEST]** {self.offer_text(shown[0])}"))
         else:
             for offer_id in offers.keys() - self.offers.keys():
                 offer, repair = offers[offer_id], self.repair_for(offers[offer_id])
                 if repair:  # shown whatever the tier filter says
-                    lines.append(f"🔧 **[REPAIR | {repair}]** {self.offer_text(offer)} | "
-                                 f"Craft: {offer.get('craft')} | Cause: {offer.get('cause')}")
+                    lines.append(alert("contract_repair", f"🔧 **[REPAIR | {repair}]** {self.offer_text(offer)} | "
+                                 f"Craft: {offer.get('craft')} | Cause: {offer.get('cause')}"))
                 elif passes_tier_filter(offer):
-                    lines.append(f"📜 {self.offer_text(offer)}")
+                    lines.append(alert("contract_offer", f"📜 {self.offer_text(offer)}"))
             for offer_id in self.offers.keys() - offers.keys():
                 offer = self.offers[offer_id]
                 if passes_tier_filter(offer) and clock.now_game_day() < offer.get("expiresDay", 0):
@@ -1826,7 +2095,7 @@ class ContractsWatcher(Watcher):
         clock, by_faction = self.ctx["clock"], {}
         for job in new:
             by_faction.setdefault(job.get("factionId") or "", []).append(job)
-        lines = [f"🤝 **[ALLIANCE JOBS]** {clock.stamp()} **{len(new)} new alliance jobs**, rewards shared by the work done:"]
+        lines = [alert("alliance_jobs", f"🤝 **[ALLIANCE JOBS]** {clock.stamp()} **{len(new)} new alliance jobs**, rewards shared by the work done:")]
         for faction_id, group in sorted(by_faction.items(), key=lambda g: (not g[0], faction_short(g[0]) if g[0] else "")):
             rows = []
             for job in sorted(group, key=lambda j: (-JOB_LEVELS.get(j.get("level"), 0), -(j.get("reward") or {}).get("money", 0))):
@@ -1838,7 +2107,7 @@ class ContractsWatcher(Watcher):
                     rows.append(f"• **{(level or '?').upper()}** {job.get('title')} | `{money(reward.get('money'))}{rp}` | {advice}")
                 else:
                     rows.append(f"• {job.get('title')} | {job.get('client')} | `{money(reward.get('money'))}{rp}`")
-            lines.append(f"**{faction_short(faction_id) if faction_id else 'Other clients'}**\n" + "\n".join(rows))
+            lines.append(alert("alliance_jobs", f"**{faction_short(faction_id) if faction_id else 'Other clients'}**\n" + "\n".join(rows)))
         return lines
 
     def job_text(self, job):
@@ -1850,9 +2119,9 @@ class ContractsWatcher(Watcher):
                 f"**{job.get('title')}** | Client: {job.get('client')} | Reward: `{money(reward.get('money'))}{rp}`, "
                 f"shared by the work done | Open until {clock.stamp(game_day=job.get('expiresDay'))}")
         if not job.get("factionId"):
-            return text  # not a faction: no standing to gain or lose
+            return alert("alliance_job", text)  # not a faction: no standing to gain or lose
         # Easy and medium jobs cost the client's rivals nothing; hard ones do.
-        return self.with_advice(text, job["factionId"], STANDING_GAIN.get(level, 0), level == "hard")
+        return alert("alliance_job", self.with_advice(text, job["factionId"], STANDING_GAIN.get(level, 0), level == "hard"))
 
     def repair_for(self, offer):
         """'OUR CRAFT' or 'ALLY <name>' for a repair contract on our or an ally's damaged craft, else None.
@@ -1876,11 +2145,11 @@ class ContractsWatcher(Watcher):
                 text = (f"🛳️ **[SHIP ORDER]** {clock.stamp(game_day=o.get('postedDay'))} **{o.get('buyerName')}** wants "
                         f"**{o.get('count')}× {o.get('craft')}** at **{place_name(self.ctx, o.get('placeId'))}** | "
                         f"Price `{money(o.get('price'))}` | Open until {clock.stamp(game_day=o.get('expiresDay'))}")
-                lines.append(self.with_advice(text, o.get("factionId"), STANDING_GAIN["contract"], True))
+                lines.append(alert("ship_order", self.with_advice(text, o.get("factionId"), STANDING_GAIN["contract"], True)))
             for order_id in self.orders.keys() - orders.keys():
                 o = self.orders[order_id]
                 how = "expired" if clock.now_game_day() >= (o.get("expiresDay") or 0) else "was filled or withdrawn"
-                lines.append(f"🛳️ {clock.stamp()} {o.get('buyerName')}'s order for {o.get('count')}× {o.get('craft')} {how}.")
+                lines.append(alert("ship_order_update", f"🛳️ {clock.stamp()} {o.get('buyerName')}'s order for {o.get('count')}× {o.get('craft')} {how}."))
         self.orders = orders
         return lines
 
@@ -1893,7 +2162,7 @@ class ContractsWatcher(Watcher):
                     if name not in self.ctx["captured"]:
                         self.ctx["captured"].add(name)
                         capture(f"contracts-{name}", items[key])
-                    lines.append(f"{icon} **[{label}]** {clock.stamp()} {describe(items[key])}")
+                    lines.append(alert({"bounties": "bounty", "fuelRequests": "rescue_contract", "rescues": "rescue_under_way"}.get(name, "contract_list"), f"{icon} **[{label}]** {clock.stamp()} {describe(items[key])}"))
             self.lists[name] = items
         return lines
 
@@ -1912,7 +2181,7 @@ class ContractsWatcher(Watcher):
             when = clock.stamp(game_day=winner.get("day")) if winner else clock.stamp()
             left = clock.until(offer["expiresDay"]).replace("in ", "")
             early = f" ({left} before it would have expired)" if left != "now" else ""
-            lines.append(f"🏴 {when} **[{tier}] {offer.get('title')}** was taken by {who}{early}.")
+            lines.append(alert("contract_taken", f"🏴 {when} **[{tier}] {offer.get('title')}** was taken by {who}{early}."))
         return lines
 
     def check_sieges(self, data, first):
@@ -1926,10 +2195,10 @@ class ContractsWatcher(Watcher):
         lines = []
         for siege_id in sieges.keys() - previous.keys():
             s = sieges[siege_id]
-            lines.append(f"🚨⚔️ **[SIEGE CONTRACT AGAINST US]** {clock.stamp(game_day=s.get('postedDay'))} "
+            lines.append(alert("siege_contract", f"🚨⚔️ **[SIEGE CONTRACT AGAINST US]** {clock.stamp(game_day=s.get('postedDay'))} "
                          f"Faction **{FACTION_NAMES.get(s.get('factionId'), s.get('factionId') or 'unknown')}** is paying **{money(s.get('reward'))}** "
                          f"to **{s.get('kind')}** our site {site_text(self.ctx, s.get('siteId'))} | Open until "
-                         f"{clock.stamp(game_day=s.get('expiresDay'))}")
+                         f"{clock.stamp(game_day=s.get('expiresDay'))}"))
             # Surrendering counts as delivering the faction's contract: the one way seen to win back a
             # faction that refuses our contracts, at a cost with its rivals.
             advice = standing_advice(self.ctx, s.get("factionId"), STANDING_GAIN["contract"], True)
@@ -1938,7 +2207,7 @@ class ContractsWatcher(Watcher):
         for siege_id in previous.keys() - sieges.keys():
             s = previous[siege_id]
             ended = "expired" if clock.now_game_day() >= s.get("expiresDay", 0) else "was fulfilled or withdrawn"
-            lines.append(f"🏰 {clock.stamp()} The siege contract on our site {site_text(self.ctx, s.get('siteId'))} {ended}.")
+            lines.append(alert("siege_contract_ended", f"🏰 {clock.stamp()} The siege contract on our site {site_text(self.ctx, s.get('siteId'))} {ended}."))
         self.sieges = sieges
         self.ctx["state"].set("sieges", sieges)
         return lines
@@ -1965,9 +2234,9 @@ class ContractHistoryWatcher(Watcher):
         lines = []
         if first:
             if data.get("items"):
-                lines.append(f"🏆 **[CONTRACT HISTORY - LATEST]** {describe(data['items'][0])}")
+                lines.append(alert("contract_history_summary", f"🏆 **[CONTRACT HISTORY - LATEST]** {describe(data['items'][0])}"))
         else:
-            lines = [f"🏆 {describe(items[key])}" for key in items.keys() - self.keys]
+            lines = [alert("contract_closed", f"🏆 {describe(items[key])}") for key in items.keys() - self.keys]
 
         self.keys = set(items)
         return lines
@@ -2074,18 +2343,18 @@ class DefenseWatcher(Watcher):
                 next_up = f" | Next: **{hazard_label(i)[1]}** lands {clock.stamp(game_day=i['startDay'])}"
             debris = len(data.get("debrisFields") or [])
             outposts = len([d for d in ours if d.get("kind") == "outpost"])
-            lines.append(f"🛡️ **[DEFENSE STATUS]** {len(threats)} asteroid threats tracked | "
+            lines.append(alert("defense_summary", f"🛡️ **[DEFENSE STATUS]** {len(threats)} asteroid threats tracked | "
                          f"{debris} debris field(s) active | {len(ours) - outposts} of our craft awaiting hazard repairs"
-                         + (f" | {outposts} outpost(s) recovering from a hazard hit" if outposts else "") + next_up)
+                         + (f" | {outposts} outpost(s) recovering from a hazard hit" if outposts else "") + next_up))
         else:
             for threat_id, t in threats.items():
                 old = self.threats.get(threat_id)
                 if old is None:
-                    lines.append(f"☄️ {clock.stamp(game_day=t.get('discoveredDay'))} **New asteroid threat {t.get('name')}** "
+                    lines.append(alert("asteroid_threat", f"☄️ {clock.stamp(game_day=t.get('discoveredDay'))} **New asteroid threat {t.get('name')}** "
                                  f"({t.get('diameterM')} m) | Arrives {clock.stamp(game_day=t.get('arrivalDay'))} "
-                                 f"| Impactors needed: {t.get('impactorsNeeded')}")
+                                 f"| Impactors needed: {t.get('impactorsNeeded')}"))
                 elif t.get("outcome") and t.get("outcome") != old.get("outcome"):
-                    lines.append(f"☄️ {clock.stamp()} Asteroid **{t.get('name')}**: outcome **{t.get('outcome')}**")
+                    lines.append(alert("asteroid_outcome", f"☄️ {clock.stamp()} Asteroid **{t.get('name')}**: outcome **{t.get('outcome')}**"))
 
             for incident_id in incidents.keys() - self.incidents.keys():
                 i = incidents[incident_id]
@@ -2093,8 +2362,8 @@ class DefenseWatcher(Watcher):
                 when = f"Lands {clock.stamp(game_day=i.get('startDay'))}" \
                     if i.get("startDay") else "Landing time unknown"
                 until = f" and lasts until {clock.stamp(game_day=i['endDay'])}" if i.get("endDay") else ""
-                lines.append(f"{icon} **[{label} FORECAST]** {clock.stamp(game_day=i.get('forecastDay'))} "
-                             f"{when}{until}." + proton_storm_text(i.get("size")))
+                lines.append(alert("hazard_forecast", f"{icon} **[{label} FORECAST]** {clock.stamp(game_day=i.get('forecastDay'))} "
+                             f"{when}{until}." + proton_storm_text(i.get("size"))))
 
             new_damage = [d for d in damage if isinstance(d.get("id"), int) and d["id"] > self.newest_damage]
             events = {}
@@ -2111,8 +2380,8 @@ class DefenseWatcher(Watcher):
                         kinds[kind] = kinds.get(kind, 0) + 1
                     where = "across **" + " and ".join(
                         f"{n} {k}" + ("s" if n > 1 and k != "craft" else "") for k, n in kinds.items()) + "**"
-                lines.append(f"🚨 {clock.stamp(game_day=hit_day)} **[HAZARD STRIKE | {str(hazard).upper()}]** "
-                             f"struck {where}: {self.victims(hits)}.")
+                lines.append(alert("hazard", f"🚨 {clock.stamp(game_day=hit_day)} **[HAZARD STRIKE | {str(hazard).upper()}]** "
+                             f"struck {where}: {self.victims(hits)}."))
                 # hazardDamage items carry deadlineDay: whatever was damaged is lost unless repaired by then.
                 for d in ours:
                     place = self.hit_place(d)
@@ -2120,10 +2389,10 @@ class DefenseWatcher(Watcher):
                         # Outposts aren't lost: the game says their sites make nothing until deadlineDay,
                         # "while its machines dig out", and then work again on their own.
                         back = (f" until {clock.stamp(game_day=d['deadlineDay'])}" if d.get("deadlineDay") else "")
-                        lines.append(f"🔧 Our outpost at **{place}** was hit: its mines and plants make nothing{back}. "
-                                     f"It works again on its own.")
+                        lines.append(alert("outpost_damaged", f"🔧 Our outpost at **{place}** was hit: its mines and plants make nothing{back}. "
+                                     f"It works again on its own."))
                     else:
-                        lines.append(f"🔧 {first_upper(self.damaged_text(d))} at {place} was damaged.{self.deadline_text(d)}")
+                        lines.append(alert("damage", f"🔧 {first_upper(self.damaged_text(d))} at {place} was damaged.{self.deadline_text(d)}"))
         # Our damaged outposts, so production stalls there are blamed on the damage, not on crew.
         self.ctx["damaged_outposts"] = {d.get("placeId"): d.get("deadlineDay") for d in damage
                                         if d.get("companyId") == our_id and d.get("kind") == "outpost"}
@@ -2154,8 +2423,8 @@ class DefenseWatcher(Watcher):
                            if (f.get("generation") or 1) > 1 else "")
                 ends = (f" | Lasts until {clock.stamp(game_day=f['endDay'])}"
                         if f.get("endDay") else "")
-                lines.append(f"💫 {clock.stamp(game_day=f.get('startDay'))} **[DEBRIS FIELD]** {f.get('cause') or 'New debris'} | "
-                             f"Caused by {self.victims([f])} | Strength {f.get('strength')}{cascade}{ends}")
+                lines.append(alert("debris_field", f"💫 {clock.stamp(game_day=f.get('startDay'))} **[DEBRIS FIELD]** {f.get('cause') or 'New debris'} | "
+                             f"Caused by {self.victims([f])} | Strength {f.get('strength')}{cascade}{ends}"))
             for field_id in set(seen) - fields.keys():
                 log(f"[Debris] Debris field #{field_id} has cleared")
         state.set("debris_fields", sorted(fields.keys(), key=int))
@@ -2184,8 +2453,8 @@ class ChatWatcher(Watcher):
             self.newest[channel] = max(self.newest.get(channel, 0), newest_id(messages))
 
             label = f" **[{header} - LATEST]**" if first else ""
-            lines = [f"{icon}{label} {self.ctx['clock'].stamp(real_ms=m.get('sentAt'))} "
-                     f"**{m.get('companyName')}**: {m.get('text', '')}" for m in fresh]
+            lines = [alert("chat" if channel == "global" else "alliance_chat", f"{icon}{label} {self.ctx['clock'].stamp(real_ms=m.get('sentAt'))} "
+                     f"**{m.get('companyName')}**: {m.get('text', '')}") for m in fresh]
             self.publish(self.ctx["webhooks"][webhook_key], header + " UPDATE", lines, first)
         self.seeded = True
 
@@ -2280,7 +2549,7 @@ def heads_up(ctx, key, game_day, text, hours_before=24):
     if not 0 < hours <= hours_before or warned.get(key) == round(game_day, 3):
         return []
     state.set("heads_up", dict(warned, **{key: round(game_day, 3)}))
-    return [f"📣 {clock.stamp()} " + text.format(hours=hours_text(hours), when=clock.stamp(game_day=game_day))]
+    return [alert("heads_up", f"📣 {clock.stamp()} " + text.format(hours=hours_text(hours), when=clock.stamp(game_day=game_day)), key=key)]
 
 
 def elevator_name(elevator_id):
@@ -2337,8 +2606,8 @@ def game_day_of_date(text):
 def ballot_closing_text(clock, closes_day, mark, ballot_line="", vote_line=""):
     """'🗳️ Earth's ballot closes in 24h' with when, what's on it and, in full mode, our vote."""
     rows = [f"Closes: {clock.stamp(game_day=closes_day)}"] + [r for r in (ballot_line, vote_line) if r]
-    return f"🗳️ {clock.stamp()} **Earth's ballot closes in {mark}h** ({mark}h warning)\n" + \
-        "\n".join(f"• {r}" for r in rows)
+    return alert("ballot_closing", f"🗳️ {clock.stamp()} **Earth's ballot closes in {mark}h** ({mark}h warning)\n" + \
+        "\n".join(f"• {r}" for r in rows))
 
 
 def stall_text(stamp, place, reasons, state="stopped", note=None):
@@ -2351,9 +2620,9 @@ def stall_text(stamp, place, reasons, state="stopped", note=None):
         why, sites = next(iter(reasons.items()))
         if note:
             why = f"{note}. {first_upper(why)}." if why and why != "mines" else note
-        return f"{icon} {stamp} **{sites[0]} at {place} {state}:** {why}"
+        return alert("site_stopped" if state == "stopped" else "site_slowed", f"{icon} {stamp} **{sites[0]} at {place} {state}:** {why}", key=f"{state}:{place}")
     head = f"{icon} {stamp} **{count} sites at {place} {state}:**" + (f" {note}" if note else "")
-    return head + "".join("\n• " + (f"**{why}:** " if why else "") + ", ".join(sites) for why, sites in reasons.items())
+    return alert("site_stopped" if state == "stopped" else "site_slowed", head + "".join("\n• " + (f"**{why}:** " if why else "") + ", ".join(sites) for why, sites in reasons.items()), key=f"{state}:{place}")
 
 
 def duration_text(seconds):
@@ -2437,7 +2706,7 @@ class CompanyWatcher(Watcher):
         if not first:
             for facility, level in levels.items():
                 if level > self.levels.get(facility, level):
-                    lines.append(f"🏗️ {clock.stamp()} **{names.get(facility, facility)}** upgraded to level **{level}**.")
+                    lines.append(alert("facility_upgraded", f"🏗️ {clock.stamp()} **{names.get(facility, facility)}** upgraded to level **{level}**."))
         self.levels = dict(levels)
 
         # Site upgrades (factories and the like) are workBills with upgrade true, one level at a time;
@@ -2451,7 +2720,7 @@ class CompanyWatcher(Watcher):
                 if key not in upgrades and ready is not None and ready - clock.now_game_day() <= UPGRADE_DONE_SLACK_DAYS:
                     # The game's own text, e.g. "at our place at Mare Humorum": the middle bit adds nothing.
                     where = f" {bill['where'].replace('at our place at ', 'at ')}" if bill.get("where") else ""
-                    lines.append(f"🏗️ {clock.stamp()} **Upgrade complete:** {bill.get('what', 'a site')}{where}.")
+                    lines.append(alert("upgrade_done", f"🏗️ {clock.stamp()} **Upgrade complete:** {bill.get('what', 'a site')}{where}."))
         self.upgrades = upgrades
 
         # Queued actions the game says are blocked (the research queue's reasons are just "waiting",
@@ -2461,11 +2730,11 @@ class CompanyWatcher(Watcher):
                    and not IGNORED_QUEUE_REASONS.match(q["reason"])}
         for queue_id, q in blocked.items():
             if not first and self.blocked.get(queue_id, {}).get("reason") != q["reason"]:
-                lines.append(f"🚧 {clock.stamp()} {queue_heading(q)} {q['reason']}{self.blocked_eta(q['reason'])}")
+                lines.append(alert("queue_blocked", f"🚧 {clock.stamp()} {queue_heading(q)} {q['reason']}{self.blocked_eta(q['reason'])}"))
         if first and blocked:
-            lines.append(f"🚧 **[QUEUE]** {len(blocked)} queued action(s) blocked:\n" +
+            lines.append(alert("queue_summary", f"🚧 **[QUEUE]** {len(blocked)} queued action(s) blocked:\n" +
                          "\n".join(f"• {queue_label(q)}{q['reason']}{self.blocked_eta(q['reason'])}"
-                                    for q in blocked.values()))
+                                    for q in blocked.values())))
         self.blocked = blocked
 
         # Research queue running dry. When research finishes, the game moves the next queued item into
@@ -2478,7 +2747,7 @@ class CompanyWatcher(Watcher):
             job = ctx.get("research_job")
             current = f" The lab is on **{ctx['tech_names'].get(job['techId'], job['techId'])}** until " \
                       f"{clock.stamp(game_day=job.get('completeDay'))} - queue more before then." if job else ""
-            lines.append(f"📭 **The research queue is empty.** {clock.stamp()}{current}")
+            lines.append(alert("research_queue_empty", f"📭 **The research queue is empty.** {clock.stamp()}{current}"))
         self.research_queue = research_queue
         ctx["research_queue"] = research_queue  # the research watcher waits for the next one to start
 
@@ -2491,9 +2760,9 @@ class CompanyWatcher(Watcher):
             hours = clock.game_days_to_hours(days_left)
             mark = self.countdown.check(("supply", place["placeId"]), hours, first)
             if mark:
-                lines.append(f"🥫 {clock.stamp()} **Crew supplies at {place_name(ctx, place['placeId'])} run out in "
+                lines.append(alert("supplies_low", f"🥫 {clock.stamp()} **Crew supplies at {place_name(ctx, place['placeId'])} run out in "
                              f"{hours_text(hours)}** ({mark}h warning) | {place['crew']:.0f} crew | "
-                             f"{clock.stamp(game_day=clock.now_game_day() + days_left)}")
+                             f"{clock.stamp(game_day=clock.now_game_day() + days_left)}"))
         self.countdown.prune()
         burn_in = data.get("relayBurnInDay")
         if isinstance(burn_in, (int, float)):  # the relay rules phase in from real day 15 to 30 of the burn-in
@@ -2507,8 +2776,8 @@ class CompanyWatcher(Watcher):
                    if p.get("crew") and (p.get("supplies") or {}).get("netDaysLeft") is not None
                    and clock.game_days_to_hours(p["supplies"]["netDaysLeft"]) <= max(COUNTDOWN_WARNINGS_HOURS)]
             if low:
-                lines.append("🥫 **[SUPPLIES]** Running low: " +
-                             ", ".join(f"{place_name(ctx, p)} ({hours_text(h)})" for p, h in low))
+                lines.append(alert("supplies_summary", "🥫 **[SUPPLIES]** Running low: " +
+                             ", ".join(f"{place_name(ctx, p)} ({hours_text(h)})" for p, h in low)))
         return lines
 
 
@@ -2633,8 +2902,8 @@ class IndustryWatcher(Watcher):
             what = f"{store.get('pool', '')} storage at {place_name(ctx, store['placeId'])}"
             top = ", ".join(f"{good_name(ctx, g)} +{t:,.0f} t/day" for g, t in filling[:3]) or "nothing listed"
             if mark:
-                lines.append(f"📦 {clock.stamp()} **{first_upper(what)} is full in {hours_text(hours)}** ({mark}h warning) | "
-                             f"{store.get('freeT', 0):,.0f} t free | filling: {top} (keep limits counted)")
+                lines.append(alert("storage_filling", f"📦 {clock.stamp()} **{first_upper(what)} is full in {hours_text(hours)}** ({mark}h warning) | "
+                             f"{store.get('freeT', 0):,.0f} t free | filling: {top} (keep limits counted)"))
                 log(f"[Storage] {store['placeId']} {store.get('pool')}: store rateT {store.get('rateT', 0):,.1f} t/day, "
                     f"goods {sum(t for _, t in filling):,.1f} t/day still filling: {filling[:8]}")
             elif first and low:
@@ -2667,8 +2936,8 @@ class IndustryWatcher(Watcher):
                 # production-stall alert says so once the site stops.
                 log(f"[Stock] {good} at {place}: {qty:,.1f} left, out in {hours_text(hours)}; not posted (effectively empty)")
             elif mark:
-                lines.append(f"⏳ {clock.stamp()} **{good_name(ctx, good)} at {place_name(ctx, place)} runs out in "
-                             f"{hours_text(hours)}** ({mark}h warning) | {kind} | {qty:,.1f} left, using {-rate:,.2f}/day")
+                lines.append(alert("stock_running_out", f"⏳ {clock.stamp()} **{good_name(ctx, good)} at {place_name(ctx, place)} runs out in "
+                             f"{hours_text(hours)}** ({mark}h warning) | {kind} | {qty:,.1f} left, using {-rate:,.2f}/day"))
             elif first and hours <= max(COUNTDOWN_WARNINGS_HOURS):
                 soon.append(f"{good_name(ctx, good)} at {place_name(ctx, place)} out in {hours_text(hours)}")
 
@@ -2811,8 +3080,8 @@ class IndustryWatcher(Watcher):
 
         if first:
             summary = f"🏭 **[INDUSTRY]** {len(stalls)} sites held up (inputs, crew or upkeep)"
-            lines.append(summary + (" | Running out or filling up within 72h:\n" + "\n".join(f"• {s}" for s in soon)
-                                    if soon else " | nothing running out within 72h"))
+            lines.append(alert("industry_summary", summary + (" | Running out or filling up within 72h:\n" + "\n".join(f"• {s}" for s in soon)
+                                    if soon else " | nothing running out within 72h")))
         return lines
 
 
@@ -2841,18 +3110,18 @@ class IndustryWatcher(Watcher):
             name = place_name(ctx, place)
             battery = f" | battery {charge:,.0f} MWh" if isinstance(charge, (int, float)) else ""
             if life < 0.999 and (old is None or old["life"] >= 0.999 or life * 100 <= old["life"] * 100 - POWER_WORSE_BY_POINTS):
-                lines.append(f"🚨 {clock.stamp()} **Life support short of power at {name}:** it gets {life:.0%} of what it "
-                             f"needs, operations {share:.0%}. Its people ration, then leave or die{battery}")
+                lines.append(alert("life_support_short", f"🚨 {clock.stamp()} **Life support short of power at {name}:** it gets {life:.0%} of what it "
+                             f"needs, operations {share:.0%}. Its people ration, then leave or die{battery}", key=f"life:{place}"))
                 posted[place] = {"share": share, "life": life}
             elif life >= 0.999 and (old is None or share * 100 <= old["share"] * 100 - POWER_WORSE_BY_POINTS):
-                lines.append(f"⚡ {clock.stamp()} **Power short at {name}:** operations running {share:.0%}{battery}")
+                lines.append(alert("power_short", f"⚡ {clock.stamp()} **Power short at {name}:** operations running {share:.0%}{battery}", key=f"power:{place}"))
                 posted[place] = {"share": share, "life": life}
             elif old and old["life"] < 0.999 <= life:
-                lines.append(f"🔋 {clock.stamp()} **Life support has full power again at {name}** | operations {share:.0%}")
+                lines.append(alert("life_support_restored", f"🔋 {clock.stamp()} **Life support has full power again at {name}** | operations {share:.0%}", key=f"life:{place}"))
                 posted[place] = {"share": share, "life": life}
         for place in [p for p in posted if p not in short]:
             if posted[place]["life"] < 0.999:
-                lines.append(f"🔋 {clock.stamp()} **Full power again at {place_name(ctx, place)}**")
+                lines.append(alert("power_restored", f"🔋 {clock.stamp()} **Full power again at {place_name(ctx, place)}**", key=f"power:{place}"))
             else:
                 log(f"[Power] Full power again at {place_name(ctx, place)}")
             del posted[place]
@@ -2876,7 +3145,7 @@ class IndustryWatcher(Watcher):
             if saved is not None and key not in saved:
                 climbs = (f" | Climbs {clock.stamp(game_day=t['depart'])}"
                           if isinstance(t["depart"], (int, float)) and t["depart"] > now + 0.01 else "")
-                lines.append(f"🛗 {clock.stamp()} **Elevator booking: {t['what']}**{climbs} | Arrives {arrive}")
+                lines.append(alert("elevator_booked", f"🛗 {clock.stamp()} **Elevator booking: {t['what']}**{climbs} | Arrives {arrive}", key=f"elevator:{key}"))
             if reminders is None:
                 continue
             for stale in [k for k in reminders.pending if k.startswith(f"elevator:{key}:") and k != f"elevator:{key}:{t['arrive']}"]:
@@ -2886,16 +3155,16 @@ class IndustryWatcher(Watcher):
                 if due - time.time() * 1000 > FLEET_ARRIVAL_WARNING_MINUTES * 60_000:
                     reminders.set(f"elevator:{key}:{t['arrive']}", due - FLEET_ARRIVAL_WARNING_MINUTES * 60_000,
                                   self.webhook, self.header,
-                                  lambda what=t["what"], arrive=t["arrive"]: (
+                                  lambda what=t["what"], arrive=t["arrive"]: alert("elevator_soon", (
                                       f"🔔 {clock.stamp()} **Elevator cargo arrives in {FLEET_ARRIVAL_WARNING_MINUTES} min:** "
-                                      f"{what} | Arrives {clock.stamp(game_day=arrive)}"))
+                                      f"{what} | Arrives {clock.stamp(game_day=arrive)}")))
         for key, t in (saved or {}).items():
             if key in ours:
                 continue
             for stale in [k for k in (reminders.pending if reminders else {}) if k.startswith(f"elevator:{key}:")]:
                 reminders.cancel(stale)
             if isinstance(t.get("arrive"), (int, float)) and t["arrive"] <= now + 0.05:
-                lines.append(f"🛗 {clock.stamp(game_day=t['arrive'])} **Elevator cargo arrived:** {t['what']}")
+                lines.append(alert("elevator_arrived", f"🛗 {clock.stamp(game_day=t['arrive'])} **Elevator cargo arrived:** {t['what']}", key=f"elevator:{key}"))
             else:
                 log(f"[Elevator] Booking gone before it arrived (canceled?): {t['what']}")
         state.set("elevator_trips", ours)
@@ -2918,8 +3187,8 @@ class IndustryWatcher(Watcher):
                     continue
                 kind = tidy_id(v.get("kind") or "vehicle").lower()
                 when = f" since {clock.stamp(game_day=since)}" if since else ""
-                lines.append(f"🚧 {clock.stamp()} **{first_upper(kind)} {v.get('name')} is blocked at "
-                             f"{place_name(ctx, v.get('regionId'))}**{when}: {v['blocked'].get('reason') or 'no reason given'}")
+                lines.append(alert("vehicle_blocked", f"🚧 {clock.stamp()} **{first_upper(kind)} {v.get('name')} is blocked at "
+                             f"{place_name(ctx, v.get('regionId'))}**{when}: {v['blocked'].get('reason') or 'no reason given'}"))
         seen = {key: v["blocked"].get("since") for key, v in blocked.items()}
         if state:
             state.set("vehicles_blocked", seen)
@@ -3173,7 +3442,7 @@ class FleetMapWatcher(Watcher):
                     f"{place_name(ctx, target)}: Earth–Moon space or ignored, not posted")
                 continue
             note = f"\n⚠️ {marked}, so we can be attacked even here." if safe else ""
-            lines.append(f"🚨⚔️ **[INCOMING FLEET]** {what} | Arrives {clock.stamp(game_day=move.get('arriveDay'))}{note}")
+            lines.append(alert("incoming_fleet", f"🚨⚔️ **[INCOMING FLEET]** {what} | Arrives {clock.stamp(game_day=move.get('arriveDay'))}{note}"))
         self.moves = {self.move_key(m) for m in moves if m.get("id") is not None}
         self.legacy_ids = set()
         self.ctx["state"].set("fleet_moves", sorted(self.moves))
@@ -3202,9 +3471,9 @@ class FleetMapWatcher(Watcher):
                     text, when = summarise(ctx, item), None
                 stamp = clock.stamp(game_day=when) if isinstance(when, (int, float)) else clock.stamp()
                 if mentions_company(item, friends):
-                    lines.append(f"⚔️ **[{label.upper()} - US OR ALLIES]** {stamp} {text}")
+                    lines.append(alert("wreck_ours" if list_name == "wrecks" else "battle_ours", f"⚔️ **[{label.upper()} - US OR ALLIES]** {stamp} {text}"))
                 else:
-                    elsewhere.append(f"⚔️ {stamp} New {label} elsewhere: {text}")
+                    elsewhere.append(alert("wreck_elsewhere" if list_name == "wrecks" else "battle_elsewhere", f"⚔️ {stamp} New {label} elsewhere: {text}"))
             self.seen[list_name] = items
 
         # Incoming fleets are security alerts: always posted, even as a startup baseline.
@@ -3244,15 +3513,15 @@ class FleetsWatcher(Watcher):
                     ctx["captured"].add(list_name)
                     capture(f"fleets-{list_name}", items[key])
                 if list_name == "ourSieges":
-                    lines.append(f"⚔️ **[{label.upper()}]** {clock.stamp()} {siege_text(ctx, items[key])}")
+                    lines.append(alert("our_siege", f"⚔️ **[{label.upper()}]** {clock.stamp()} {siege_text(ctx, items[key])}"))
                 else:
-                    lines.append(f"⚔️ **[{label.upper()}]** {clock.stamp()} {summarise(ctx, items[key])}")
+                    lines.append(alert({"engagementOrders": "our_battle", "duels": "our_duel"}.get(list_name, "our_combat"), f"⚔️ **[{label.upper()}]** {clock.stamp()} {summarise(ctx, items[key])}"))
             if not first:
                 for key in previous.keys() - items.keys():
                     if list_name == "ourSieges":
-                        lines.append(f"🏳️ {clock.stamp()} {siege_text(ctx, previous[key], ended=True)}")
+                        lines.append(alert("our_siege_ended", f"🏳️ {clock.stamp()} {siege_text(ctx, previous[key], ended=True)}"))
                     else:
-                        lines.append(f"🏳️ {clock.stamp()} {ended.capitalize()}: {summarise(ctx, previous[key])}")
+                        lines.append(alert({"engagementOrders": "our_battle_over", "duels": "our_duel_over"}.get(list_name, "our_combat_over"), f"🏳️ {clock.stamp()} {ended.capitalize()}: {summarise(ctx, previous[key])}"))
             self.seen[list_name] = items
         if FLEET_MOVE_POSTS:
             lines += self.flights(data.get("fleetMoves") or [], first)
@@ -3276,12 +3545,12 @@ class FleetsWatcher(Watcher):
             arrive = f"{clock.stamp(game_day=f['arrive'])}" if isinstance(f["arrive"], (int, float)) else "at an unknown time"
             old = (saved or {}).get(key)
             if saved is not None and old is None:
-                lines.append(f"🧭 {clock.stamp()} **Our fleet left {place_name(ctx, f['from'])} for {to}:** {what} | "
-                             f"Lands {arrive}")
+                lines.append(alert("fleet_left", f"🧭 {clock.stamp()} **Our fleet left {place_name(ctx, f['from'])} for {to}:** {what} | "
+                             f"Lands {arrive}", key=f"fleet:{key}"))
             elif old and (old.get("to") != f["to"] or (isinstance(old.get("arrive"), (int, float))
                           and isinstance(f["arrive"], (int, float)) and abs(old["arrive"] - f["arrive"]) > 0.05)):
-                lines.append(f"↪️ {clock.stamp()} **Our fleet bound for {place_name(ctx, old.get('to'))} now heads for "
-                             f"{to}:** {what} | Lands {arrive}")
+                lines.append(alert("fleet_rerouted", f"↪️ {clock.stamp()} **Our fleet bound for {place_name(ctx, old.get('to'))} now heads for "
+                             f"{to}:** {what} | Lands {arrive}", key=f"fleet:{key}"))
             for stale in [k for k in reminders.pending if k.startswith(f"fleet:{key}:") and k != f"fleet:{key}:{f['arrive']}"]:
                 reminders.cancel(stale)
             if FLEET_ARRIVAL_WARNING_MINUTES and isinstance(f["arrive"], (int, float)):
@@ -3289,9 +3558,9 @@ class FleetsWatcher(Watcher):
                 if due - time.time() * 1000 > FLEET_ARRIVAL_WARNING_MINUTES * 60_000:
                     reminders.set(f"fleet:{key}:{f['arrive']}", due - FLEET_ARRIVAL_WARNING_MINUTES * 60_000,
                                   self.webhook, self.header,
-                                  lambda to=to, what=what, arrive=f["arrive"]: (
+                                  lambda to=to, what=what, arrive=f["arrive"]: alert("fleet_soon", (
                                       f"🔔 {clock.stamp()} **Our fleet lands at {to} in {FLEET_ARRIVAL_WARNING_MINUTES} "
-                                      f"min:** {what} | Lands {clock.stamp(game_day=arrive)}"))
+                                      f"min:** {what} | Lands {clock.stamp(game_day=arrive)}")))
         now = clock.now_game_day()
         for key, f in (saved or {}).items():
             if key in ours:
@@ -3300,7 +3569,7 @@ class FleetsWatcher(Watcher):
                 reminders.cancel(stale)
             what, to = units_text(f.get("units"), names), place_name(ctx, f.get("to"))
             if isinstance(f.get("arrive"), (int, float)) and f["arrive"] <= now + 0.05:
-                lines.append(f"⚓ {clock.stamp(game_day=f['arrive'])} **Our fleet landed at {to}:** {what}")
+                lines.append(alert("fleet_landed", f"⚓ {clock.stamp(game_day=f['arrive'])} **Our fleet landed at {to}:** {what}", key=f"fleet:{key}"))
             else:
                 log(f"[Fleets] Our fleet bound for {to} ({what}) stopped flying before it was due: called off or lost.")
         state.set("fleet_flights", ours)
@@ -3359,7 +3628,7 @@ class FactionsWatcher(Watcher):
             changes.append(f"Next Security Council session: {clock.stamp(game_day=snapshot['nextSessionDay'])}")
         if not changes:
             return []
-        return [f"🌍 {clock.stamp()} **Earth's government changed:**\n" + "\n".join(f"• {c}" for c in changes)]
+        return [alert("government_changed", f"🌍 {clock.stamp()} **Earth's government changed:**\n" + "\n".join(f"• {c}" for c in changes))]
 
     def ballot_changes(self, ballot, mine, government):
         """Earth's yearly policy ballot (since Update 85): a post when a ballot opens, when its phase changes
@@ -3406,13 +3675,13 @@ class FactionsWatcher(Watcher):
             if vote:
                 rows.append(f"Our vote: {policy_name(vote)}")
             year = f" {snapshot['year']}" if snapshot["year"] else ""
-            lines.append(f"🗳️ {clock.stamp()} **Earth's{year} ballot:**\n" + "\n".join(f"• {r}" for r in rows))
+            lines.append(alert("ballot", f"🗳️ {clock.stamp()} **Earth's{year} ballot:**\n" + "\n".join(f"• {r}" for r in rows)))
         if policies is not None and old.get("policies") != policies and (policies or "policies" in old):
             if isinstance(policies, list):
                 shown = ", ".join(f"**{policy_name(p)}**" for p in policies)
             else:
                 shown = describe(policies) if isinstance(policies, dict) else str(policies)
-            lines.append(f"🏛️ {clock.stamp()} **Earth's policies in force:** {shown or 'none'}")
+            lines.append(alert("policies_in_force", f"🏛️ {clock.stamp()} **Earth's policies in force:** {shown or 'none'}"))
         return lines
 
     def ballot_closing(self, ballot, mine, first):
@@ -3465,7 +3734,7 @@ class FactionsWatcher(Watcher):
                             ", ".join(f"{'UEG' if fid == 'ueg' else FACTION_NAMES.get(fid, fid)} {v:+.1f}"
                                       for fid, v in gifts.items()))
             title = "**[FACTION STANDINGS]**" if first else f"{clock.stamp()} **Faction standing changed:**"
-            lines.append(f"🏛️ {title}\n" + "\n".join(rows))
+            lines.append(alert("standings_summary" if first else "standing_changed", f"🏛️ {title}\n" + "\n".join(rows)))
             self.reported = dict(standing)
 
         # Halcyon Arms Exchange: warships listed for sale ({sid, name, unitId, price, listedDay}),
@@ -3477,12 +3746,12 @@ class FactionsWatcher(Watcher):
         bought = data.get("brokerBought")
         ours = bought - self.bought if bought is not None and self.bought is not None and bought > self.bought else 0
         if first and listings:
-            lines.append(f"🛒 **[SHIPBROKER]** {self.listing_summary(listings.values())} for sale at Halcyon Arms Exchange")
+            lines.append(alert("shipbroker_summary", f"🛒 **[SHIPBROKER]** {self.listing_summary(listings.values())} for sale at Halcyon Arms Exchange"))
         elif not first:
             added = [listings[k] for k in listings.keys() - self.listings.keys()]
             gone = [self.listings[k] for k in self.listings.keys() - listings.keys()]
             if added:
-                lines.append(f"🛒 {clock.stamp()} **Halcyon Arms Exchange listed** {self.listing_summary(added)}")
+                lines.append(alert("shipbroker_listed", f"🛒 {clock.stamp()} **Halcyon Arms Exchange listed** {self.listing_summary(added)}"))
             if ours:
                 log(f"[Exchange] We bought {ours} ship(s); gone from the list: "
                     + (self.listing_summary(gone) if gone else "none"))
@@ -3511,10 +3780,10 @@ class FactionsWatcher(Watcher):
                 if key not in self.watch_hits:
                     self.watch_hits.add(key)
                     if not first:
-                        lines.append(f"🩸 {clock.stamp()} **New Clear Sky / bloodmark data in the API:** "
-                                     f"`{key}` = `{json.dumps(value, ensure_ascii=False)[:150]}`")
+                        lines.append(alert("clear_sky_data", f"🩸 {clock.stamp()} **New Clear Sky / bloodmark data in the API:** "
+                                     f"`{key}` = `{json.dumps(value, ensure_ascii=False)[:150]}`"))
                     else:
-                        lines.append(f"🩸 **[CLEAR SKY]** Already in the API: `{key}`")
+                        lines.append(alert("clear_sky_data_summary", f"🩸 **[CLEAR SKY]** Already in the API: `{key}`"))
         return lines
 
 
@@ -3550,11 +3819,11 @@ class FactionsWatcher(Watcher):
             mark = self.naming_countdown.check(("naming", key), clock.hours_until(until), False) \
                 if isinstance(until, (int, float)) else None
             if key not in told:
-                lines.append(f"🏷️ {clock.stamp()} **We name the colony:** {faction}'s Ambition **{a.get('name')}** is "
+                lines.append(alert("colony_to_name", f"🏷️ {clock.stamp()} **We name the colony:** {faction}'s Ambition **{a.get('name')}** is "
                              f"done and we did the most stages, so its colony is ours to name{limit}. Past that, "
-                             f"we lose the chance.")
+                             f"we lose the chance."))
             elif mark:
-                lines.append(f"🏷️ {clock.stamp()} **Colony still to name ({mark}h left):** {a.get('name')}{limit}")
+                lines.append(alert("colony_to_name", f"🏷️ {clock.stamp()} **Colony still to name ({mark}h left):** {a.get('name')}{limit}"))
         ids = {str(a["id"]) for a in ambitions}
         state.set("ambition_naming_told", sorted((told & ids) | current))
         return lines
@@ -3601,13 +3870,13 @@ class DiplomacyWatcher(Watcher):
             have, rate = self.ctx.get("stock", {}).get((term.get("placeId"), term.get("goodId")), (0, 0))
             want, name = term.get("qty") or 0, good_name(self.ctx, term.get("goodId"))
             if have < want:
-                warnings.append(f"⚠️ We only have {have:,.0f} {name} there: **{want - have:,.0f} short**, "
-                                f"so it can't be accepted as it stands.")
+                warnings.append(alert("deal_shortfall", f"⚠️ We only have {have:,.0f} {name} there: **{want - have:,.0f} short**, "
+                                f"so it can't be accepted as it stands."))
             elif rate < 0:
                 hours = clock.game_days_to_hours((have - want) / -rate)
                 expires_hours = clock.hours_until(deal["expiresDay"]) if deal.get("expiresDay") else None
                 if expires_hours is None or hours < expires_hours:
-                    warnings.append(f"⚠️ {name} there is being used up: we'll be short in **{hours_text(hours)}**.")
+                    warnings.append(alert("deal_shortfall", f"⚠️ {name} there is being used up: we'll be short in **{hours_text(hours)}**."))
         return warnings
 
     def describe_deal(self, deal):
@@ -3632,19 +3901,19 @@ class DiplomacyWatcher(Watcher):
                        if deal.get("expiresDay") else "")
             if old is None:
                 if status == "open" and ours:
-                    lines.append(f"📨 **Offer from {who}** (deal #{deal_id}) · {clock.stamp()}: {self.describe_deal(deal)}. "
-                                 f"**Our move.**{expires}")
+                    lines.append(alert("deal_offer", f"📨 **Offer from {who}** (deal #{deal_id}) · {clock.stamp()}: {self.describe_deal(deal)}. "
+                                 f"**Our move.**{expires}", key=f"deal:{deal_id}"))
                     lines += self.shortfalls(deal)
                 elif status == "open":
                     log(f"[Diplomacy] Deal #{deal_id} with {who} is open, waiting on them.")
                 elif status not in ("draft",) and not seeding:
-                    lines.append(f"🤝 {clock.stamp()} Deal #{deal_id} with **{who}** is **{status}**: {self.describe_deal(deal)}")
+                    lines.append(alert("deal_status", f"🤝 {clock.stamp()} Deal #{deal_id} with **{who}** is **{status}**: {self.describe_deal(deal)}", key=f"deal:{deal_id}"))
             elif old.get("status") != status:
                 icon = "🤝" if status == "accepted" else "❌"
-                lines.append(f"{icon} {clock.stamp()} Deal #{deal_id} with **{who}** was **{status}**: {self.describe_deal(deal)}")
+                lines.append(alert("deal_status", f"{icon} {clock.stamp()} Deal #{deal_id} with **{who}** was **{status}**: {self.describe_deal(deal)}", key=f"deal:{deal_id}"))
             elif status == "open" and ours and (old.get("turn") != deal.get("turn") or old.get("terms") != deal.get("terms")):
-                lines.append(f"↩️ {clock.stamp()} **{who} countered** (deal #{deal_id}, round {deal.get('round')}): "
-                             f"{self.describe_deal(deal)}. **Our move.**{expires}")
+                lines.append(alert("deal_countered", f"↩️ {clock.stamp()} **{who} countered** (deal #{deal_id}, round {deal.get('round')}): "
+                             f"{self.describe_deal(deal)}. **Our move.**{expires}", key=f"deal:{deal_id}"))
                 lines += self.shortfalls(deal)
 
             key = f"deal:{deal_id}:{deal.get('expiresDay')}"
@@ -3653,8 +3922,8 @@ class DiplomacyWatcher(Watcher):
             if status == "open" and ours and deal.get("expiresDay"):
                 reminders.set(key, clock.real_ms_for(deal["expiresDay"]) - DEAL_EXPIRY_WARNING_MINUTES * 60_000,
                               self.webhook, self.header,
-                              f"⏰ **The offer from {who} (deal #{deal_id}) expires in {DEAL_EXPIRY_WARNING_MINUTES} minutes** "
-                              f"and it's our move: {self.describe_deal(deal)}")
+                              alert("deal_expiring", f"⏰ **The offer from {who} (deal #{deal_id}) expires in {DEAL_EXPIRY_WARNING_MINUTES} minutes** "
+                              f"and it's our move: {self.describe_deal(deal)}"))
             else:
                 reminders.cancel(key)
             previous[deal_id] = snapshot
@@ -3670,9 +3939,9 @@ class DiplomacyWatcher(Watcher):
                 if "agreements" not in self.ctx["captured"]:
                     self.ctx["captured"].add("agreements")
                     capture("factions-agreements", agreements[key])
-                lines.append(f"📜 {clock.stamp()} **New agreement:** {describe(agreements[key])}")
+                lines.append(alert("agreement_new", f"📜 {clock.stamp()} **New agreement:** {describe(agreements[key])}"))
             for key in self.agreements.keys() - agreements.keys():
-                lines.append(f"📜 {clock.stamp()} **Agreement ended:** {describe(self.agreements[key])}")
+                lines.append(alert("agreement_ended", f"📜 {clock.stamp()} **Agreement ended:** {describe(self.agreements[key])}"))
         self.agreements = agreements
         self.ctx["state"].set("agreements", agreements)
 
@@ -3722,11 +3991,11 @@ class AllianceWatcher(Watcher):
             spied_on = alliance_names.get(m.get("allianceId"), f"alliance #{m.get('allianceId')}")
             until = f"{clock.stamp(game_day=m.get('untilDay'))}"
             if m.get("allianceId") == ctx["alliance_id"]:
-                lines.append(f"🕵️ {clock.stamp(game_day=m.get('sinceDay'))} **Spy caught spying on our alliance:** "
-                             f"**{m.get('name')}** is marked hostile to us until {until}")
+                lines.append(alert("spy_caught", f"🕵️ {clock.stamp(game_day=m.get('sinceDay'))} **Spy caught spying on our alliance:** "
+                             f"**{m.get('name')}** is marked hostile to us until {until}"))
             elif m.get("companyId") in ctx["ally_ids"] | {ctx["company_id"]}:
-                lines.append(f"🕵️ {clock.stamp(game_day=m.get('sinceDay'))} **{m.get('name')}** (ours) was caught spying on "
-                             f"**{spied_on}** - marked hostile until {until}")
+                lines.append(alert("our_spy_caught", f"🕵️ {clock.stamp(game_day=m.get('sinceDay'))} **{m.get('name')}** (ours) was caught spying on "
+                             f"**{spied_on}** - marked hostile until {until}"))
             else:
                 log(f"[Intel] {m.get('name')} caught spying on {spied_on}")
         self.marks = set(marks)
@@ -3757,7 +4026,7 @@ class DiscoveriesWatcher(Watcher):
                 if "hostileTo" not in self.ctx["captured"]:
                     self.ctx["captured"].add("hostileTo")
                     capture("discoveries-hostileTo", hostile[key])
-                lines.append(f"🕵️ {clock.stamp()} **We've been marked hostile:** {summarise(self.ctx, hostile[key])}")
+                lines.append(alert("marked_hostile", f"🕵️ {clock.stamp()} **We've been marked hostile:** {summarise(self.ctx, hostile[key])}"))
         self.hostile = hostile
         lines += self.relays(data.get("relaySystems"))
         stopped = self.recoveries(data.get("codex"))
@@ -3785,9 +4054,9 @@ class DiscoveriesWatcher(Watcher):
         lost = [place_name(ctx, x) for x in sorted(set(saved) - set(now))]
         if not lost:
             return []
-        return [f"📡 {clock.stamp()} **Relay coverage lost: {', '.join(lost)}.** Our craft there earn and find less, "
+        return [alert("relay_lost", f"📡 {clock.stamp()} **Relay coverage lost: {', '.join(lost)}.** Our craft there earn and find less, "
                 f"telescopes there track nothing, and warships stationed there tire faster (as the relay rules phase in). "
-                f"An orbiter on the relay task, a station or base, an ally's relay or Relay access from a faction covers it"]
+                f"An orbiter on the relay task, a station or base, an ally's relay or Relay access from a faction covers it")]
 
     def recoveries(self, codex):
         if not isinstance(codex, dict) or not isinstance(codex.get("finds"), list):
@@ -3799,9 +4068,9 @@ class DiscoveriesWatcher(Watcher):
         for story_id in (was or {}):
             f = finds.get(story_id)
             if f and f.get("recoverEndDay") is None and f.get("recoveredDay") is None:
-                lines.append(f"⏹️ {clock.stamp()} **Codex recovery stopped:** {f.get('what') or f.get('title')} at "
+                lines.append(alert("codex_stopped", f"⏹️ {clock.stamp()} **Codex recovery stopped:** {f.get('what') or f.get('title')} at "
                              f"{f.get('where') or place_name(self.ctx, f.get('placeId'))}. Our craft there left before "
-                             f"it was recovered. Ships, an outpost or a lander there can start it again.")
+                             f"it was recovered. Ships, an outpost or a lander there can start it again."))
         state.set("codex_recovering", {story_id: f["recoverEndDay"] for story_id, f in finds.items()
                                        if f.get("recoverEndDay") is not None and f.get("recoveredDay") is None})
         return lines
@@ -3820,8 +4089,8 @@ class MarketWatcher(Watcher):
         state.set("market_corruption", level)
         if old is None or old == level:
             return []
-        return [f"🕵️ {self.ctx['clock'].stamp()} **Earth's market corruption is now {level}** (was {old}): how much of "
-                f"Earth's trade is being siphoned off"]
+        return [alert("market_corruption", f"🕵️ {self.ctx['clock'].stamp()} **Earth's market corruption is now {level}** (was {old}): how much of "
+                f"Earth's trade is being siphoned off")]
 
 
 class AccountWatcher(Watcher):
@@ -3841,7 +4110,7 @@ class AccountWatcher(Watcher):
             return []
         self.reminded_day = today
         self.ctx["state"].set("gift_reminded_day", today)
-        return [f"🎁 **Daily login gift not claimed yet today.** Login streak: {streak.get('day', '?')} days."]
+        return [alert("daily_gift", f"🎁 **Daily login gift not claimed yet today.** Login streak: {streak.get('day', '?')} days.")]
 
 
 class RecordsWatcher(Watcher):
@@ -3869,7 +4138,7 @@ class RecordsWatcher(Watcher):
             if t.get("companyId") == me:
                 found[("tech", t.get("techId"))] = (
                     t.get("day"), "🧪", f"First company to research **{names.get(t.get('techId'), t.get('techId'))}**!")
-        lines = [] if first else [f"{icon} {clock.stamp(game_day=day)} {text}"
+        lines = [] if first else [alert({"badge": "badge_earned", "first": "world_first", "tech": "tech_first"}.get(key[0], "record"), f"{icon} {clock.stamp(game_day=day)} {text}")
                                   for key, (day, icon, text) in found.items() if key not in self.ours]
         self.ours = set(found)
         return lines
@@ -3974,9 +4243,9 @@ class NewsWatcher(Watcher):
         if not gone:
             log(f"[Theft] None of our ships went missing with \"{text}\"")
             return []
-        return [f"🚨 {ctx['clock'].stamp(game_day=day)} **Ships of ours may have been stolen:** since the news that "
+        return [alert("theft", f"🚨 {ctx['clock'].stamp(game_day=day)} **Ships of ours may have been stolen:** since the news that "
                 f"\"{text.rstrip('.')}\", we're missing {', '.join(gone)}. Thieves take ships left at Earth or the Moon with "
-                f"no crew aboard and no orders; check the Fleet tab."]
+                f"no crew aboard and no orders; check the Fleet tab.")]
 
     def clear_sky_text(self, when, text):
         """A Clear Sky action naming us. A walkout stops all output at one of our outposts: the post lists what stops
@@ -3984,7 +4253,7 @@ class NewsWatcher(Watcher):
         ctx = self.ctx
         walkout = WALKOUT_RE.search(text)
         if not walkout:
-            return f"✊ {when} **Clear Sky acted against us:** {text}"
+            return alert("clear_sky", f"✊ {when} **Clear Sky acted against us:** {text}")
         until = game_day_of_date(walkout["until"])
         place = walkout["place"]
         place_id = next((pid for pid in ctx.get("sites_by_place") or {} if place_name(ctx, pid) == place), None)
@@ -3992,8 +4261,8 @@ class NewsWatcher(Watcher):
         if place_id:
             ctx.setdefault("walkouts", {})[place_id] = until
         stops = f" | Stops: {', '.join(sites)}" if sites else ""
-        return (f"✊ {when} **Clear Sky walkout at our {place} outpost:** all output there stops until "
-                f"{ctx['clock'].stamp(game_day=until)}{stops}")
+        return alert("clear_sky", (f"✊ {when} **Clear Sky walkout at our {place} outpost:** all output there stops until "
+                f"{ctx['clock'].stamp(game_day=until)}{stops}"))
 
     def update(self, data, first):
         ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
@@ -4011,16 +4280,16 @@ class NewsWatcher(Watcher):
                 if kind == "salvage" and n.get("companyId") != ctx["company_id"] and (
                         (ours and f"abandoned by {ours}" in text)
                         or any(name and name in text for name in ctx.get("our_derelicts", ()))):
-                    lines.append(f"🏴‍☠️ {when} **One of our derelicts was salvaged:** {text}")
+                    lines.append(alert("derelict_salvaged", f"🏴‍☠️ {when} **One of our derelicts was salvaged:** {text}"))
                 elif kind == "salvage" and n.get("companyId") != ctx["company_id"] and (
                         team := next((t for name, t in (ctx.get("salvage_targets") or {}).items()
                                       if f"derelict {name}," in text), None)):
-                    lines.append(f"🏴‍☠️ {when} **A derelict our salvage team {team} was heading for was taken:** {text}")
+                    lines.append(alert("salvage_target_taken", f"🏴‍☠️ {when} **A derelict our salvage team {team} was heading for was taken:** {text}"))
                 elif kind == "faction" and text.startswith("Halcyon Arms Exchange sold"):
-                    lines.append(f"🛒 {when} **Faction warship purchase:** {text}")
+                    lines.append(alert("faction_warship_sale", f"🛒 {when} **Faction warship purchase:** {text}"))
                 elif kind == "raid":
                     ours_hit = any(re.search(re.escape(name) + r"(?![\w-])", text) for name in self.our_names())
-                    lines.append(f"🏴‍☠️ {when} " + ("**Pirates hit us:** " if ours_hit else "**Pirate activity:** ") + text)
+                    lines.append(alert("pirates_hit_us" if ours_hit else "pirate_activity", f"🏴‍☠️ {when} " + ("**Pirates hit us:** " if ours_hit else "**Pirate activity:** ") + text))
                     if THEFT_NEWS in text:
                         self.theft = (n.get("day"), text, time.time() + THEFT_CHECK_SECONDS)
                 elif kind == "clear_sky" and ours and re.search(re.escape(ours) + r"[’']s\b", text):
@@ -4028,7 +4297,7 @@ class NewsWatcher(Watcher):
                 elif kind == "market_event":
                     log(f"[Market event] {text}{market_event_note(ctx, text)}")
                     if MARKET_EVENT_POSTS:
-                        lines.append(f"📈 {when} **Market event:** {text}{market_event_note(ctx, text)}")
+                        lines.append(alert("market_event", f"📈 {when} **Market event:** {text}{market_event_note(ctx, text)}"))
         state.set("news_seen_id", newest)
         if self.theft and isinstance(self.theft[0], (int, float)):
             lines += self.check_theft(self.theft)
@@ -4094,9 +4363,9 @@ class SegmentsWatcher(Watcher):
                 craft = used[sid]
                 there = ", ".join(f"**{c}**" if c != "our ships" else c for c in craft[:3]) + \
                     (f" +{len(craft) - 3} more" if len(craft) > 3 else "")
-                lines.append(f"💸 {clock.stamp()} **{holder(s.get('companyId'))} is raising the cost of "
+                lines.append(alert("segment_cost_rise", f"💸 {clock.stamp()} **{holder(s.get('companyId'))} is raising the cost of "
                              f"{orbit_text(sid)}**, where we have {there}: {policy_text(s)} → "
-                             f"**{policy_text(s['pending'])}** from {clock.stamp(game_day=s['pending'].get('fromDay'))}")
+                             f"**{policy_text(s['pending'])}** from {clock.stamp(game_day=s['pending'].get('fromDay'))}"))
         state.set("segment_notices", sorted(notices))
 
         mine = {sid: s for sid, s in segments.items() if s.get("companyId") == me}
@@ -4104,14 +4373,14 @@ class SegmentsWatcher(Watcher):
         for sid, s in mine.items():
             challenger = s.get("challengerId")
             if challenger and (first or old.get(sid, {}).get("challengerId") != challenger):
-                lines.append(f"⚔️ {clock.stamp()} **{holder(challenger)} is taking over our claim on {orbit_text(sid)}**: "
+                lines.append(alert("claim_takeover", f"⚔️ {clock.stamp()} **{holder(challenger)} is taking over our claim on {orbit_text(sid)}**: "
                              f"their presence there beats ours (since {clock.stamp(game_day=s.get('challengeSince'))}). "
-                             f"Station warships there, or add craft, to hold it.")
+                             f"Station warships there, or add craft, to hold it."))
         if self.claims is not None:
             for sid in self.claims.keys() - mine.keys():
                 taker = (segments.get(sid) or {}).get("companyId")
-                lines.append(f"🚩 {clock.stamp()} **We lost our claim on {orbit_text(sid)}**"
-                             + (f" to {holder(taker)}." if taker else ": it lapsed."))
+                lines.append(alert("claim_lost", f"🚩 {clock.stamp()} **We lost our claim on {orbit_text(sid)}**"
+                             + (f" to {holder(taker)}." if taker else ": it lapsed.")))
         self.claims = mine
         return lines
 
@@ -4147,7 +4416,7 @@ class PlaceWatcher(Watcher):
         lines = []
         for body_id, group in by_body.items():
             sites = "\n".join(f"• **{p.get('name', p['id'])}**{self.deposits_text(p)}" for p in group)
-            lines.append(f"🗺️ {clock.stamp()} **{len(group)} new place(s) at {body_name(ctx, body_id)}:**\n{sites}")
+            lines.append(alert("new_places", f"🗺️ {clock.stamp()} **{len(group)} new place(s) at {body_name(ctx, body_id)}:**\n{sites}"))
         if not NEW_PLACE_POSTS:
             for line in lines:
                 log("[Places] " + line.replace("\n", " "))
@@ -4208,9 +4477,9 @@ class PadGoalWatcher(Watcher):
                 cap = g.get("fromCapacity")
                 more = f" ({cap} → {cap + 1} launch campaigns at once)" if isinstance(cap, int) else ""
                 still = f" | **Still needed:** {self.goods_text(missing)}" if missing != needs else ""
-                lines.append(f"🏗️ **[PAD GOAL]** {clock.stamp(game_day=g.get('postedDay'))} **{port}** wants materials for a "
+                lines.append(alert("pad_goal", f"🏗️ **[PAD GOAL]** {clock.stamp(game_day=g.get('postedDay'))} **{port}** wants materials for a "
                              f"new launch pad{more}: {self.goods_text(needs)}, delivered in "
-                             f"**{place_name(ctx, region)}**{still} | Open to every company")
+                             f"**{place_name(ctx, region)}**{still} | Open to every company"))
             for key in set(seen) - goals.keys():
                 log(f"[Pad goals] Pad goal #{key} is gone from the list")
         state.set("pad_goals_seen", sorted(goals.keys(), key=int))
@@ -4258,8 +4527,8 @@ class DerelictWatcher(Watcher):
                 else:
                     where = f"in **{where}**"
                 ends = f" | Drifts out of service {clock.stamp(game_day=m['endDay'])}" if m.get("endDay") else ""
-                lines.append(f"💰 {clock.stamp()} **Derelict worth {money(m.get('lootValue'))}:** **{m.get('name')}**, "
-                             f"abandoned by {owner}, {where}{ends}")
+                lines.append(alert("derelict_found", f"💰 {clock.stamp()} **Derelict worth {money(m.get('lootValue'))}:** **{m.get('name')}**, "
+                             f"abandoned by {owner}, {where}{ends}"))
         state.set("derelicts_seen", sorted(derelicts.keys(), key=int))
         if first and lines:  # appeared while we were stopped: still worth posting, even after a --silent start
             ctx["discord"].post(self.webhook, self.header, lines)
@@ -4303,9 +4572,9 @@ class ApiSpecWatcher(Watcher):
             text += (f"\nA bridge update may follow to make use of it: watch <{BRIDGE_PROJECT_URL}>"
                      + (" (the bridge also posts here when one is out)." if UPDATE_CHECK else "."))
             if first:  # changed while we were stopped: still worth posting
-                self.ctx["discord"].post(self.webhook, self.header, [text])
+                self.ctx["discord"].post(self.webhook, self.header, [alert("api_changed", text)])
             else:
-                lines.append(text)
+                lines.append(alert("api_changed", text))
         self.fields = set(fields)
         self.ctx["state"].set("spec_fields", sorted(fields))
         return lines
@@ -4369,8 +4638,8 @@ class GameUpdateWatcher(Watcher):
         recent = [u for u in (self.ctx["state"].get("game_updates") or []) if u >= time.time() - 86400]
         self.ctx["state"].set("game_updates", recent + [live])
         # The build's file names are only logged (below): they mean nothing to players.
-        text = (f"🔄 **[GAME UPDATE]** {when} A new version of the game is live. The bridge re-checks the API in "
-                f"{SPEC_RECHECK_AFTER_UPDATE_SECONDS // 60} minutes and posts here if it changed.")
+        text = alert("game_update", (f"🔄 **[GAME UPDATE]** {when} A new version of the game is live. The bridge re-checks the API in "
+                f"{SPEC_RECHECK_AFTER_UPDATE_SECONDS // 60} minutes and posts here if it changed."))
         log(f"[Game site] New build: {saved.get('bundles')} → {bundles} (Last-Modified {modified})")
         spec = self.ctx.get("spec_watcher")
         if spec is not None:
@@ -4434,9 +4703,9 @@ class BridgeUpdateWatcher(Watcher):
                 and time.time() - (saved.get("at") or 0) < UPDATE_NOTICE_MIN_GAP_SECONDS):
             return  # told moments ago, before a restart
         state.set("update_notice", {"version": latest, "at": time.time()})
-        text = (f"🆕 **SOL-Watch {latest} is available** (this bridge runs {VERSION}). Download it from "
+        text = alert("bridge_update", (f"🆕 **SOL-Watch {latest} is available** (this bridge runs {VERSION}). Download it from "
                 f"<{BRIDGE_PROJECT_URL}>; CHANGELOG.md there says what changed, and the README's \"Upgrading\" "
-                f"section how to install it. This reminder repeats once a day until the bridge is upgraded.")
+                f"section how to install it. This reminder repeats once a day until the bridge is upgraded."))
         # Posted even on the first poll, like a game update: it's news whenever the bridge starts.
         self.ctx["discord"].post(self.webhook, self.header, [text])
 
@@ -4477,13 +4746,13 @@ def lite_key_ok(sections, state, post):
     state.set("lite_key_extra", extra)
     if not extra:
         if told:
-            post("🔑 Sol-Watch Lite's API key now has only News and records and Public chat. Posting resumes.")
+            post(alert("key_ok", "🔑 Sol-Watch Lite's API key now has only News and records and Public chat. Posting resumes."))
         return True
     if told != extra:
-        post("🔒 **Sol-Watch Lite is paused:** its API key can also read company data ("
+        post(alert("key_problem", "🔒 **Sol-Watch Lite is paused:** its API key can also read company data ("
              + ", ".join(extra) + "). Lite mode posts to channels anyone may read, so it runs only from a key with "
              "just **News and records** and **Public chat**. Untick the rest under Settings › Account › API keys "
-             "(the same key keeps working), or make a new key for lite mode. Nothing is posted until then.")
+             "(the same key keeps working), or make a new key for lite mode. Nothing is posted until then."))
     log(f"[Lite] Paused: the key can also read {', '.join(extra)}.")
     return False
 
@@ -4569,12 +4838,12 @@ class LiteNewsWatcher(Watcher):
                     firsts[company][1].append((stamp, found["what"], found["where"]))
                     continue
                 firsts[company] = (len(lines), [(stamp, found["what"], found["where"])])
-            lines.append(f"{icon} {stamp} {text}")
+            lines.append(alert(lite_news_kind(kind, icon), f"{icon} {stamp} {text}"))
         for company, (index, found) in firsts.items():
             if len(found) > 1:
                 listed = "; ".join(f"{what} ({where})" for _, what, where in found)
-                lines[index] = (f"{LITE_NEWS_ICONS['frontier']} {found[-1][0]} {company} was first to recover "
-                                f"{len(found)} documents: {listed}.")
+                lines[index] = alert("news_frontier", (f"{LITE_NEWS_ICONS['frontier']} {found[-1][0]} {company} was first to recover "
+                                f"{len(found)} documents: {listed}."))
         state.set("news_seen_id", newest)
         state.set("lite_navy_ships", navy_ships[-LITE_NAVY_SHIPS_KEPT:])
         state.set("lite_counts", counts)
@@ -4638,7 +4907,7 @@ class LiteCompaniesWatcher(Watcher):
         old = state.get("lite_names")
         for cid, name in names.items():
             if old and old.get(cid) and old[cid] != name:
-                lines.append(f"✏️ {clock.stamp()} **{old[cid]}** is now called **{name}**.")
+                lines.append(alert("company_renamed", f"✏️ {clock.stamp()} **{old[cid]}** is now called **{name}**."))
         state.set("lite_names", {**(old or {}), **names})
 
         bullies = {f"{b.get('companyId')}@{b.get('untilDay')}": b for b in data.get("bullies") or [] if isinstance(b, dict)}
@@ -4648,10 +4917,10 @@ class LiteCompaniesWatcher(Watcher):
                 if key in marked or any(k.split("@")[0] == str(b.get("companyId")) for k in marked):
                     continue  # the mark of one already marked only moved its end: not news
                 victims = b.get("victims")
-                lines.append(f"⚠️ {clock.stamp()} **{names.get(str(b.get('companyId')), 'A company')}** is marked a "
+                lines.append(alert("bully_marked", f"⚠️ {clock.stamp()} **{names.get(str(b.get('companyId')), 'A company')}** is marked a "
                              f"bully for attacking much smaller companies" + (f" ({victims} so far)" if victims else "")
                              + f", until {clock.stamp(game_day=b.get('untilDay'))}. Companies it attacked are "
-                             "protected again until then.")
+                             "protected again until then."))
         state.set("lite_bullies", sorted(bullies))
         return lines
 
@@ -4671,8 +4940,8 @@ class LiteRecordsWatcher(Watcher):
         if known is not None:
             for tech_id, f in sorted(firsts.items(), key=lambda kv: kv[1].get("day") or 0):
                 if tech_id not in known:
-                    lines.append(f"🧪 {clock.stamp(game_day=f.get('day'))} **{names.get(f.get('companyId'), 'A company')}** "
-                                 f"is the first company to research **{techs.get(tech_id, tidy_id(tech_id))}**.")
+                    lines.append(alert("tech_first", f"🧪 {clock.stamp(game_day=f.get('day'))} **{names.get(f.get('companyId'), 'A company')}** "
+                                 f"is the first company to research **{techs.get(tech_id, tidy_id(tech_id))}**."))
         state.set("lite_tech_firsts", sorted(firsts))
 
         duels = {str(d["companyId"]): [d.get("won", 0), d.get("lost", 0), d.get("drawn", 0)]
@@ -4682,8 +4951,8 @@ class LiteRecordsWatcher(Watcher):
             for cid, record in duels.items():
                 if before.get(cid) != record:
                     won, lost, drawn = record
-                    lines.append(f"🤺 {clock.stamp()} Duel record of **{names.get(int(cid), f'Company #{cid}')}**: "
-                                 f"{won} won, {lost} lost, {drawn} drawn.")
+                    lines.append(alert("duel_record", f"🤺 {clock.stamp()} Duel record of **{names.get(int(cid), f'Company #{cid}')}**: "
+                                 f"{won} won, {lost} lost, {drawn} drawn."))
         state.set("lite_duels", duels)
         return lines
 
@@ -4704,8 +4973,8 @@ class MemorialWatcher(Watcher):
         for m in sorted((m for m in items if m["id"] > seen), key=lambda m: m["id"]):
             crew = ", ".join(str(c["name"]) for c in m.get("crew") or [] if isinstance(c, dict) and c.get("name"))
             lost = m.get("lost") or 1
-            lines.append(f"🕯️ {clock.stamp(game_day=m.get('day'))} **{m.get('companyName')}** lost {lost} crew"
-                         + (f" ({crew})" if crew else "") + f": {m.get('cause') or 'cause unknown'}.")
+            lines.append(alert("crew_lost", f"🕯️ {clock.stamp(game_day=m.get('day'))} **{m.get('companyName')}** lost {lost} crew"
+                         + (f" ({crew})" if crew else "") + f": {m.get('cause') or 'cause unknown'}."))
         if first and lines:
             ctx["discord"].post(self.webhook, self.header, lines)
             return []
@@ -4752,7 +5021,7 @@ class LiteDigest(DailyStatus):
                 f"{n} {LITE_NEWS_NOISE.get(kind, (kind, kind))[n != 1]}" for kind, n in sorted(noise.items(), key=lambda kv: -kv[1])))
         state.set("lite_digest_raids", counts["raids"])
         state.set("lite_counts", {})
-        return "\n".join(rows)
+        return alert("lite_status", "\n".join(rows))
 
 
 def run_lite(config, api, state, clock, discord, broadcast_startup, sections, once):
@@ -4775,10 +5044,10 @@ def run_lite(config, api, state, clock, discord, broadcast_startup, sections, on
     if not state.get("lite_announced"):
         state.set("lite_announced", True)
         discord.post(webhook, "SOL-WATCH LITE", [
-            f"🛰️ **Sol-Watch Lite v{VERSION} is set up** ({why}). This channel gets public game news, the memorial, "
+            alert("lite_setup", f"🛰️ **Sol-Watch Lite v{VERSION} is set up** ({why}). This channel gets public game news, the memorial, "
             "firsts, duel records, name changes, bully marks and global chat, plus a digest at the status times. "
             "Nothing about any company that isn't public in the game. Its key needs only **News and records** and "
-            "**Public chat**."])
+            "**Public chat**.")])
     tables = lite_tables(api, once)
     ctx = {
         "api": api, "clock": clock, "discord": discord, "broadcast_startup": broadcast_startup, "state": state,
@@ -4880,7 +5149,7 @@ def check_key_sections(api, state, post):
     if missing_ids == (before or []):
         return missing_ids  # already told (or nothing to tell)
     if not missing_ids:
-        post("🔑 Our API key now has every section the bridge reads.")
+        post(alert("key_ok", "🔑 Our API key now has every section the bridge reads."))
         return missing_ids
     needed = [e for e in missing if e[2] != "optional"]
     optional = [e for e in missing if e[2] == "optional"]
@@ -4894,7 +5163,7 @@ def check_key_sections(api, state, post):
     if optional:
         lines.append(("Optional, not ticked: " if needed else "🔑 Optional key section not ticked: ")
                      + "; ".join(f"**{title}** ({effect})" for _, title, _, _, effect in optional))
-    post("\n".join(lines))
+    post(alert("key_problem" if needed else "key_optional", "\n".join(lines)))
     return missing_ids
 
 

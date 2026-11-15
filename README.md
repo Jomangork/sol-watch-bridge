@@ -260,6 +260,18 @@ The 🟢 BRIDGE STATUS post gives the version, uptime, polls, and the game updat
 - **Unchanged data.** Unchanged endpoints cost almost nothing, because the API returns "304 not modified".
 - **Times** show the game time in a grey box, day first: `23 Apr 2032, 06:22 AM`. A post's own time comes after its main information: after the headline when details follow a " | ", otherwise at the end of the line. Game time runs 24 times faster than real time. A time that's still ahead (a landing, an expiry, a forecast) also shows the real time and a live countdown, e.g. `27 Apr 2032, 09:49 AM` · 🕰️ 12:57 AM (in 3 hours). Discord draws those two itself, in each viewer's own time zone and language setting, so they're right for anyone the channel is shared with. Hover over the real time for its full date. The log files write that real time out in `IRL_TIMEZONE` instead. The formats and icons are set near the top of `sol_watch.py` (`GAME_TIME_FORMAT`, `GAME_TIME_ICON`, `REAL_TIME_ICON`).
 
+## Alert labels (for programs that run the bridge)
+
+Each line the bridge posts is an `Alert`: a plain string, posted to Discord exactly as before, that also carries labels for a program running `sol_watch.py` in-process (such as a phone app), so it can sort and filter alerts without reading emoji:
+
+- `kind`: what the alert is, one of the ids in `ALERT_KINDS` near the top of `sol_watch.py` (each with a short description and its default priority). Kinds are never renamed; new ones are added.
+- `priority`: `urgent` (🚨, 🚨⚔️, 🆘 and API key problems), `normal`, `info` (startup summaries, the status post, good news about the key) or `chat` (relayed game chat).
+- `title`: the headline as plain text, without emoji, `**` marks or game time.
+- `game_ms`: the real time of the alert's game-time stamp in epoch milliseconds, or `None`.
+- `key`: the same id when an alert is posted again about the same thing (a fleet, a deal, a place's power), or `""`.
+
+`ALERT_FIELDS` (now 1) goes up if these fields change. Nothing is written to a file or sent anywhere for this.
+
 ## Upgrading
 
 The bridge tells you when a new version is out (🆕 in the Corp channel). Download it from https://github.com/Jomangork/sol-watch-bridge, replace the program files with the new ones and restart the bridge. The download never contains `.env` or `settings.ini`, so copying it over your folder keeps your key, webhooks and settings. Keep `state.json` and `logs/` too: `state.json` is what stops a restart from repeating old news. Read the new `CHANGELOG.md` entries first.
