@@ -83,7 +83,7 @@ try:
 except ImportError:  # Python < 3.9
     ZoneInfo = None  # type: ignore[misc,assignment]
 
-VERSION = "1.09.00"
+VERSION = "1.10.00"
 HERE = Path(__file__).resolve().parent
 SETTINGS_FILE = "settings.ini"  # your own settings (optional); see settings.example.ini
 MIN_POLL_SECONDS = 10           # settings.ini can't poll anything more often than this
@@ -126,6 +126,10 @@ FLEET_ARRIVAL_WARNING_MINUTES = 30
 # Our space elevator bookings, the same way: booked (when it climbs and arrives), a reminder before it arrives
 # (FLEET_ARRIVAL_WARNING_MINUTES), and arrived. Off unless settings.ini turns it on ([alerts] elevator_trip_posts).
 ELEVATOR_TRIP_POSTS = False
+# Our rail links (/industry surface.rails): when we start laying one, with when it opens, and when it's open. Also
+# shared rail lines we've put money or structures into (surface.lines): when laying starts and when it's open.
+# Not urgent, so off unless settings.ini turns it on ([alerts] rail_link_posts = yes).
+RAIL_LINK_POSTS = False
 ELEVATOR_NAMES = {"elevator": "Artsutanov Elevator"}  # the first one's id; the others' ids name them
 # Power at our places off Earth (build DT8v4-Zx): a place whose operations get less than this share of the power
 # they need is posted (life support short always is), and again when it falls this many points further.
@@ -416,6 +420,10 @@ ALERT_KINDS = {  # kind: (what it is, for a settings screen; its priority)
     "elevator_booked": ("Elevator cargo booked", "normal"),
     "elevator_soon": ("Elevator cargo arrives soon", "normal"),
     "elevator_arrived": ("Elevator cargo arrived", "normal"),
+    "rail_laying": ("We started laying a rail link", "normal"),
+    "rail_open": ("Our rail link is open", "normal"),
+    "rail_line_laying": ("A shared rail line we backed is being laid", "normal"),
+    "rail_line_open": ("A shared rail line we backed is open", "normal"),
     "power_short": ("Power short at one of our places", "normal"),
     "power_restored": ("Full power again", "normal"),
     "life_support_short": ("Life support short of power", "urgent"),
@@ -910,6 +918,7 @@ SETTINGS_SPEC = (
     ("alerts", "fleet_move_posts", "FLEET_MOVE_POSTS", "bool", None),
     ("alerts", "global_chat_posts", "GLOBAL_CHAT_POSTS", "bool", None),
     ("alerts", "elevator_trip_posts", "ELEVATOR_TRIP_POSTS", "bool", None),
+    ("alerts", "rail_link_posts", "RAIL_LINK_POSTS", "bool", None),
     ("alerts", "power_short_below_percent", "POWER_SHORT_BELOW_PERCENT", "float", (1, 100)),
     ("alerts", "fleet_arrival_warning_minutes", "FLEET_ARRIVAL_WARNING_MINUTES", "int", (0, 1440)),
     ("incoming", "ignore_earth_moon", "INCOMING_IGNORE_EARTH_MOON", "bool", None),
@@ -3078,6 +3087,8 @@ class IndustryWatcher(Watcher):
         if ELEVATOR_TRIP_POSTS:
             lines += self.elevator_trips(industry.get("elevatorTrips") or [])
         lines += self.power(industry.get("power"))
+        if RAIL_LINK_POSTS:
+            lines += self.rail_links(industry.get("surface") or {})
 
         if first:
             summary = f"🏭 **[INDUSTRY]** {len(stalls)} sites held up (inputs, crew or upkeep)"
@@ -3169,6 +3180,52 @@ class IndustryWatcher(Watcher):
             else:
                 log(f"[Elevator] Booking gone before it arrived (canceled?): {t['what']}")
         state.set("elevator_trips", ours)
+        return lines
+
+    def rail_links(self, surface):
+        """Our rail links (surface.rails[{id, companyId, a, b, km, open, readyDay}]) and the shared rail lines we
+        back (surface.lines[{id, a, b, km, status: funding/laying/open, readyDay, backers[{companyId, share}]}]).
+        Posted: laying started (with when it opens) and open. A shared line still being funded isn't. Saved in
+        state.json, so nothing is posted twice or missed over a restart; the first run ever only records them."""
+        ctx, clock, state = self.ctx, self.ctx["clock"], self.ctx["state"]
+        me = ctx.get("company_id")
+        now = {}
+        for r in surface.get("rails") or []:
+            if isinstance(r, dict) and r.get("companyId") == me and r.get("id") is not None:
+                now[f"rail:{r['id']}"] = {"a": r.get("a"), "b": r.get("b"), "km": r.get("km"), "ready": r.get("readyDay"),
+                                          "status": "open" if r.get("open") else "laying", "share": None}
+        for line in surface.get("lines") or []:
+            backer = next((b for b in line.get("backers") or [] if isinstance(b, dict) and b.get("companyId") == me), None)
+            if isinstance(line, dict) and backer and line.get("id") is not None:
+                now[f"line:{line['id']}"] = {"a": line.get("a"), "b": line.get("b"), "km": line.get("km"),
+                                             "ready": line.get("readyDay"), "status": line.get("status"),
+                                             "share": backer.get("share")}
+        saved = state.get("rail_links")
+        state.set("rail_links", now)
+        if saved is None:
+            return []
+        lines = []
+        for key, r in now.items():
+            before = (saved.get(key) or {}).get("status")
+            if r["status"] == before:
+                continue
+            shared = key.startswith("line:")
+            route = f"{place_name(ctx, r['a'])} – {place_name(ctx, r['b'])}"
+            km = f" ({r['km']:,.0f} km)" if isinstance(r["km"], (int, float)) else ""
+            share = f" | our share {r['share']:.0%}" if shared and isinstance(r["share"], (int, float)) else ""
+            if r["status"] == "laying":
+                opens = (f" | Opens {clock.stamp(game_day=r['ready'])}" if isinstance(r["ready"], (int, float)) else "")
+                lines.append(alert("rail_line_laying" if shared else "rail_laying",
+                                   f"🛤️ {clock.stamp()} **{'Shared rail line being laid' if shared else 'Laying a rail link'}: "
+                                   f"{route}**{km}{share}{opens}", key=key))
+            elif r["status"] == "open":
+                ready = r["ready"]  # its time, unless that's still ahead (opened a moment early): then now
+                when = ready if isinstance(ready, (int, float)) and ready <= clock.now_game_day() else None
+                lines.append(alert("rail_line_open" if shared else "rail_open",
+                                   f"🛤️ {clock.stamp(game_day=when)} **{'Shared rail line open' if shared else 'Rail link open'}: "
+                                   f"{route}**{km}{share}", key=key))
+        for key in saved.keys() - now.keys():
+            log(f"[Rail] No longer listed: {key} {saved[key].get('a')} – {saved[key].get('b')}")
         return lines
 
     def blocked_vehicles(self, industry, first):

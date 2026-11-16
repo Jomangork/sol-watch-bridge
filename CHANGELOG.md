@@ -4,6 +4,10 @@ Newest first. The version is `VERSION` near the top of `sol_watch.py`, and the b
 
 Version numbers are `MAJOR.MINOR.PATCH`, two digits each. A patch changes something the bridge already does (wording, a fix). A minor version adds a feature, usually a new kind of alert. The major number moves only when upgrading means editing your settings.
 
+## 1.10.00 (Nov 16, 2026)
+
+- **Rail links** (off by default: `rail_link_posts = yes` under `[alerts]`). When we start laying a rail link, it's posted with its route, length and when it opens (🛤️), and again when it's open. A shared rail line we've put money or structures into is posted when it starts being laid (with our share) and when it's open; one still being funded isn't. There's no reminder before it opens.
+
 ## 1.09.00 (Nov 15, 2026)
 
 - **One Discord channel.** The bridge now posts everything to one webhook, `WEBHOOK_BRIDGE`, instead of three. Nothing to edit when upgrading: without `WEBHOOK_BRIDGE`, it posts to `WEBHOOK_CORP` (else `WEBHOOK_GENERAL`), and only logs that the other webhooks are no longer used. Lite mode is unchanged (`WEBHOOK_LITE`, else `WEBHOOK_GENERAL`).
