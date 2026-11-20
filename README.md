@@ -1,3 +1,7 @@
+> **RETIRED. This project is no longer supported.**
+>
+> The Discord bridge, and the Android app that was built on it (Sol Watch Pocket), have been replaced by a new, separate Sol Watch app written from scratch. This repository stays online for reference only: no updates, no fixes, no support. The game's API can change, and this code may stop working at any time.
+
 # SOL-Watch bridge
 
 Polls the SOL game's read-only API (https://solthegame.com/api/v1) with your own API key and posts what changes in your company and the game to one Discord channel. A **lite mode** posts only what every player sees alike (Solar News, global chat and the like) to one channel, for a server anyone may read; see [Lite mode](#lite-mode). It's a single Python file with one dependency (`requests`), and runs on any always-on machine with Python 3.9 or newer: a Linux box, a Raspberry Pi 3 or newer, or a Windows PC.
